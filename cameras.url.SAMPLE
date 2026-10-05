@@ -1,0 +1,6 @@
+Cs3-porta rtsp://10.1.55.39:554/primary
+Cs3-utca1 rtsp://10.1.55.17:554/primary
+Cs6-utca1 rtsp://10.1.55.34:554/primary
+Cs6-utca2 rtsp://10.1.55.35:554/primary
+Cs6-udvar1 rtsp://10.1.55.36:554/primary
+Cs6-udvar2 rtsp://10.1.55.38:554/primary

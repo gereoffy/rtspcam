@@ -1,0 +1,777 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rtspcam lejátszó</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+:root{--bg:#14161a;--panel:#1e2128;--line:#2e333d;--fg:#e6e8ec;--dim:#8b92a0;--acc:#4da3ff;--rec:#35c46a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif}
+main{display:grid;grid-template-columns:360px minmax(0,1fr);gap:14px;padding:12px;align-items:start}
+aside.panel{position:sticky;top:12px;display:flex;flex-direction:column;max-height:calc(100vh - 24px)}
+.top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.top h1{font-size:16px;margin:0}
+.tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px}
+details#filters{margin-top:10px;border:1px solid var(--line);border-radius:6px;padding:6px 10px}
+details#filters summary{cursor:pointer;color:var(--dim);font-size:13px;user-select:none}
+#fbadge{color:var(--acc);font-weight:600}
+@media(max-width:960px){main{grid-template-columns:1fr}aside.panel{position:static;max-height:none}#list{max-height:50vh}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px}
+label{display:block;color:var(--dim);font-size:12px;margin:8px 0 2px}
+select,input,button{background:#2a2f39;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;max-width:100%}
+button:hover{border-color:var(--acc);cursor:pointer}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#list{flex:1;min-height:120px;margin-top:10px;overflow:auto;border-top:1px solid var(--line)}
+.day{cursor:pointer;position:sticky;top:0;background:var(--panel);color:var(--dim);font-size:12px;padding:8px 0 4px;text-transform:uppercase;letter-spacing:.06em}
+.item{padding:6px 8px;border-radius:6px;cursor:pointer;display:grid;grid-template-columns:auto 1fr auto;gap:2px 10px;align-items:baseline}
+.item:hover{background:#262b34}.item.sel{background:#243349;outline:1px solid var(--acc)}
+.item .t{font-variant-numeric:tabular-nums;font-weight:600}
+.item .c{color:var(--acc)}
+.item .a{color:var(--rec);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.stage{width:min(100%,max(400px,calc((100vh - 270px)*var(--ar,1.333))));margin:0 auto}
+.wrap{position:relative;background:#000;border-radius:6px;overflow:hidden;width:100%}
+video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0 0;will-change:transform}
+.wrap.zoomed{cursor:grab}.wrap.panning{cursor:grabbing}
+#zoomind{position:absolute;top:8px;right:8px;background:#000b;color:#fff;padding:2px 10px;border-radius:12px;font-size:12px;pointer-events:none;display:none}
+#ov{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+#tl{width:100%;height:90px;display:block;margin-top:10px;border-radius:4px;background:#101216;cursor:pointer}
+.row{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.row .grow{flex:1}
+#hud{color:var(--dim);font-variant-numeric:tabular-nums}
+#msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);pointer-events:none;text-align:center;padding:20px}
+#tunepanel{display:none;margin-top:12px;border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#191c22}
+#tunepanel .tp-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+#tunepanel .tp-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:2px 16px}
+.stage.tuning #inforow{display:none}
+#tunepanel{padding:8px 12px !important;margin-top:8px !important}
+#tunepanel .tp-head{margin-bottom:2px !important}
+#tunepanel #tstats{margin-top:4px !important;font-size:13px !important}
+.stage.tuning{width:100%}
+.stage.tuning .wrap{width:min(100%,max(400px,calc((100vh - 505px)*var(--ar,1.333))));margin-left:auto;margin-right:auto}
+#tunepanel .ctl label{display:flex;justify-content:space-between;color:var(--fg);font:12px ui-monospace,Menlo,monospace;margin:2px 0 0;white-space:nowrap}
+#tunepanel .row{margin-top:6px}
+#tunepanel details summary{cursor:pointer;color:var(--dim);font-size:12px;margin-top:6px}
+#tunepanel .ctl label b{color:var(--acc);font-variant-numeric:tabular-nums}
+#tunepanel input[type=range]{width:100%;accent-color:var(--acc);padding:0}
+#tunepanel small{display:block;color:var(--dim);font-size:11px}
+#tunepanel textarea{width:100%;height:64px;margin-top:4px;background:#101216;color:#cfd6e4;border:1px solid var(--line);border-radius:6px;font:11px ui-monospace,Menlo,monospace;padding:6px}
+#tunepanel .zone{display:inline-flex;gap:4px;align-items:center;background:#2a2f39;border-radius:10px;padding:1px 4px 1px 10px;font-size:12px;color:var(--dim)}
+#tunepanel .zone button{padding:0 6px;border-radius:8px}
+.seg{display:inline-flex}.seg button{border-radius:0;margin:0}.seg button:first-child{border-radius:6px 0 0 6px}.seg button:last-child{border-radius:0 6px 6px 0;border-left:0}
+.seg button.on{background:var(--acc);color:#04121f;border-color:var(--acc);font-weight:600}
+#tunebtn.on{background:#ffd23f;border-color:#ffd23f;color:#201800}
+#modebadge{position:absolute;top:8px;left:8px;padding:2px 10px;border-radius:12px;font-size:12px;pointer-events:none;background:#000b;color:#fff}
+#modebadge.tune{background:#ffd23fee;color:#201800;font-weight:600}
+#tl.tuning{outline:2px solid #ffd23f}
+#sz{width:100%;height:90px;display:block;margin-top:4px;border-radius:4px;background:#101216;cursor:pointer}
+#drawz.on{background:#ffd23f;color:#201800;border-color:#ffd23f}
+.wrap.drawing{cursor:crosshair}
+@media(max-width:1250px){#tunepanel .tp-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:760px){#tunepanel .tp-grid{grid-template-columns:1fr}}
+.chk{display:inline-flex;gap:6px;align-items:center;margin:0;color:var(--fg);font-size:14px}
+</style>
+</head>
+<body>
+<main>
+  <aside class="panel">
+    <div class="top"><a href="/live" id="livebtn" title="élőkép: az összes kamera" style="background:#2a2f39;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 10px;text-decoration:none;font-weight:600"><span style="color:#ff3b30">●</span> Élő</a><h1>rtspcam lejátszó</h1><span id="count" style="color:var(--dim)"></span></div>
+    <div class="tools">
+      <button id="refresh" title="új felvételek betöltése">↻ Frissítés</button>
+      <label class="chk" style="color:var(--dim);font-size:12px"><input type="checkbox" id="autorefresh" checked> automatikus (30 mp)</label>
+    </div>
+    <details id="filters">
+      <summary>Szűrők<span id="fbadge"></span></summary>
+      <label>Időszak</label><select id="fper" style="width:100%"><option value="1">Utolsó 1 óra</option><option value="24" selected>Utolsó 24 óra</option><option value="168">Utolsó 7 nap</option><option value="0">Minden</option></select>
+      <label>Kamera</label><select id="fcam" style="width:100%"><option value="">Mind</option></select>
+      <div class="two">
+        <div><label>Dátum -tól</label><input type="date" id="fd0"></div>
+        <div><label>Dátum -ig</label><input type="date" id="fd1"></div>
+        <div><label>Napszak -tól</label><input type="time" id="ft0"></div>
+        <div><label>Napszak -ig</label><input type="time" id="ft1"></div>
+      </div>
+      <div class="row"><label class="chk"><input type="checkbox" id="fmap"> csak térképpel</label><button id="freset" class="grow" style="flex:0">Szűrők törlése</button></div>
+    </details>
+    <div id="list"></div>
+  </aside>
+  <section class="panel">
+   <div class="stage" id="stage">
+    <div class="wrap" id="wrap" style="aspect-ratio:4/3" title="Görgő: nagyítás az egérkurzornál · húzás: mozgatás · dupla kattintás: visszaállítás">
+      <div id="zoomind"></div>
+      <div id="modebadge"></div>
+      <video id="v" playsinline preload="auto"></video>
+      <canvas id="ov"></canvas>
+      <div id="msg">Válassz egy felvételt a listából.</div>
+    </div>
+    <canvas id="tl"></canvas>
+    <div id="szbox" style="display:none">
+      <div class="row" style="margin-top:6px;font-size:12px;color:var(--dim)"><span>Kockaméret (.mvvec):</span>
+        <select id="szkind"><option value="f">frame_bytes (egész kocka)</option><option value="v">vcl_bytes (csak képi réteg)</option></select>
+        <label style="margin:0" title="0 = az egész klip mediánja (rövid felvételekhez, hangoláshoz); több száz = mozgómedián az előző N kockából (hosszú felvételekhez)">medián ablak <input type="number" id="szwin" value="0" min="0" max="2000" style="width:64px"> kocka (0 = egész klip)</label>
+        <label style="margin:0" title="a kocka akkor is „mozgásos", ha a mérete ennyiszerese a mediánnak (és nem I-kocka, és nem global_limit-es). 0 = ki. Csak a hangolásban él, a konfigba nem mentődik (a C rögzítő még nem ismeri)">méretarány-küszöb <input type="range" id="szratio" min="0" max="4" step="0.1" value="0" style="width:120px;padding:0"> <b id="szratiov" style="color:var(--acc)">ki</b></label>
+        <label style="margin:0">skála <select id="szscale"><option value="3">3×</option><option value="5">5×</option><option value="10" selected>10×</option></select> medián</label>
+        <span><b style="color:#5b9bd5">■</b> P-kocka mérete · <b style="color:#ffb000">━</b> medián · <b style="color:#fff">▮</b> I-kocka/kiugró (&gt; 10× medián, skálán kívül)</span></div>
+      <canvas id="sz"></canvas>
+    </div>
+    <div class="row vrow">
+      <button id="play" style="min-width:90px">▶ Lejátszás</button>
+      <button id="prev" title="előző kocka (←)">◀ kocka</button><button id="next" title="következő kocka (→)">kocka ▶</button>
+      <select id="speed" title="sebesség"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
+      <span class="seg" title="mi alapján látszik az idővonal és a kockák"><button id="recbtn" class="on" title="az idővonal és a kockák a rögzítő által írt .mvmap-ből">Rögzítő (.mvmap)</button><button id="tunebtn" title="a riasztási paraméterek hangolása a .mvvec-ből, csúszkákkal (a .mvmap-et ilyenkor nem használja)">⚙ Hangolás (.mvvec)</button></span>
+    </div>
+    <div class="row vrow"><span id="hud"></span></div>
+    <div id="tunepanel">
+      <div class="tp-grid" id="tsliders"></div>
+      <div class="row"><button id="drawz" title="húzz egy téglalapot a képen: ezt a területet a rögzítő figyelmen kívül hagyja">▭ Zóna rajzolása</button><span id="zlist"></span><button id="zclear">Zónák törlése</button></div>
+      <div id="tstats" style="margin-top:8px;font-size:14px"></div>
+      <div class="row"><label style="margin:0;color:var(--dim)">Kamera neve <input type="text" id="tname" size="12"></label><button id="tload">Betöltés</button><button id="tsave" style="background:var(--acc);color:#04121f;border-color:var(--acc);font-weight:600">Mentés</button><span id="tmsg" style="color:var(--dim);font-size:12px"></span></div>
+      <details><summary>Parancs a rögzítőhöz</summary><textarea id="tcmd" readonly></textarea></details>
+    </div>
+    <div class="row" id="settings">
+      <label class="chk"><input type="checkbox" id="showov" checked> mozgástérkép</label>
+      <label class="chk"><input type="checkbox" id="onlybest" checked title="a sárga (zaj) blokkok eltűnnek, csak a narancs és a piros marad"> zaj elrejtése (sárga)</label>
+      <select id="ovmode" title="mit rajzoljon a képre: a riasztó kockákat, a mozgásvektorokat (.mvvec; a vonal hossza a vektor hossza, a színe az iránya) vagy mindkettőt"><option value="cells">kockák</option><option value="vec">vektorok</option><option value="both">kockák + vektorok</option></select>
+      <label class="chk" title="lejátszáskor magától belenagyít a riasztó (piros) képrészletbe és követi: a piros kockák befoglaló téglalapjának kb. kétszeresét mutatja, simított mozgással. Kézi nagyítás/húzás kikapcsolja."><input type="checkbox" id="autozoom"> autozoom</label>
+      <label class="chk" title="a felvétel végén automatikusan elindul ugyanannak a kamerának a következő felvétele"><input type="checkbox" id="auto"> autoplay</label>
+    </div>
+    <div class="row" id="inforow"><span id="info" style="color:var(--dim);font-size:12px"></span></div>
+   </div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let items = [], shown = [], cur = null;
+// /player/<camera>: the camera filter starts on that camera (any other camera, or all of them, can still be chosen there)
+// (also /player#<camera>: a hash without '/' is a camera name, a recording id always looks like camera/date/name)
+const FIXCAM = (m => m ? decodeURIComponent(m[1]) : (h => h && !h.includes('/') ? h : '')(decodeURIComponent(location.hash.slice(1))))(location.pathname.match(/^\/player\/([^\/]+)/));
+if (FIXCAM) document.title = FIXCAM + ' – lejátszó';
+// ---- list ---------------------------------------------------------------------
+function fillCameras() {
+  const keep = $('fcam').value, cams = [...new Set(items.map(i => i.camera).concat(FIXCAM ? [FIXCAM] : []))].sort();
+  $('fcam').innerHTML = '<option value="">Mind (' + cams.length + ')</option>' + cams.map(c => `<option>${c}</option>`).join('');
+  if (cams.includes(keep)) $('fcam').value = keep;
+}
+// The page loads only the period it shows (server: /api/list?since=<epoch>), refreshes incrementally (only the recent part is asked again)
+// and every 20th automatic refresh (and the manual one) reloads the whole loaded range, which also drops deleted recordings.
+let loadedFrom = 0, autoCount = 0, refreshing = false;            // loadedFrom: epoch seconds the items start at, 0 = everything
+const perStart = () => { const h = +$('fper').value; return h ? Date.now() / 1000 - h * 3600 : 0; };
+async function fetchItems(since) { return (await fetch('/api/list' + (since ? '?since=' + Math.floor(since) : ''))).json(); }
+async function ensureRange() {                                    // the period was widened: load the older part too
+  const need = perStart();
+  if (loadedFrom !== 0 && (need === 0 || need < loadedFrom)) { $('count').textContent = 'betöltés…'; items = await fetchItems(need); loadedFrom = need; fillCameras(); }
+}
+function fillCameras() {
+  const keep = $('fcam').value, cams = [...new Set(items.map(i => i.camera).concat(FIXCAM ? [FIXCAM] : []))].sort();
+  $('fcam').innerHTML = '<option value="">Mind (' + cams.length + ')</option>' + cams.map(c => `<option>${c}</option>`).join('');
+  if (cams.includes(keep)) $('fcam').value = keep;
+}
+// reload the file list without disturbing playback, filters, selection or scroll position
+async function refreshList(manual) {
+  if (refreshing || !items.length && !manual) return;
+  refreshing = true; const sc = $('list').scrollTop, before = items.length;
+  try {
+    if (manual || ++autoCount % 20 === 0) items = await fetchItems(loadedFrom);
+    else { const last = items.reduce((m, i) => Math.max(m, i.ts), 0), since = Math.max(loadedFrom, last - 3600);     // an hour back: files that were still being written
+      const fresh = await fetchItems(since); items = items.filter(i => i.ts < since).concat(fresh); }
+    fillCameras(); applyFilters(); $('list').scrollTop = sc;
+    if (manual) $('count').textContent += items.length > before ? ' (+' + (items.length - before) + ' új)' : ' (nincs új)';
+  } catch (e) { $('count').textContent = 'a szerver nem érhető el'; }
+  refreshing = false;
+}
+$('refresh').onclick = () => refreshList(true);
+setInterval(() => { if ($('autorefresh').checked && !document.hidden) refreshList(false); }, 30000);
+// the page address decides where the list starts: /player = all cameras, last hour; /player/<camera> (or #<camera>) = that camera, last 24 hours
+// (the camera and period filters are not restored from the previous visit, the other filters are)
+const defaultPeriod = () => FIXCAM ? '24' : '1';
+async function loadList() {
+  $('count').textContent = 'betöltés…';
+  $('fper').value = defaultPeriod();
+  loadedFrom = perStart(); items = await fetchItems(loadedFrom);
+  const hid = location.hash.length > 1 ? decodeURIComponent(location.hash.slice(1)) : '';
+  if (hid.includes('/') && loadedFrom && !items.some(i => i.id === hid)) { items = await fetchItems(0); loadedFrom = 0; $('fper').value = '0'; }   // a link to an older recording
+  fillCameras();
+  restoreFilters(); $('fcam').value = FIXCAM; applyFilters();
+  if (hid.includes('/')) { const it = items.find(i => i.id === hid); if (it) select(it, false); }
+}
+const dayState = {};                                              // date -> collapsed (user's choice); the default is below
+function applyFilters() {
+  const cam = $('fcam').value, d0 = $('fd0').value, d1 = $('fd1').value, t0 = $('ft0').value, t1 = $('ft1').value, mp = $('fmap').checked, per = $('fper').value, ps = perStart();
+  shown = items.filter(i => (!cam || i.camera === cam) && (!ps || i.ts >= ps) && (!d0 || i.date >= d0) && (!d1 || i.date <= d1) && (!mp || i.has_map)
+    && (!t0 || i.time.slice(0,5) >= t0) && (!t1 || i.time.slice(0,5) <= t1)).sort((a,b) => b.ts - a.ts);
+  const nf = [cam, d0, d1, t0, t1].filter(Boolean).length + (mp ? 1 : 0) + (per !== '0' ? 1 : 0);
+  $('fbadge').textContent = nf ? ' · ' + nf + ' aktív' : '';
+  // day groups: a click on the date folds it; with a long period (a week or everything) all days but the newest start folded
+  const counts = {}; for (const it of shown) counts[it.date] = (counts[it.date] || 0) + 1;
+  const newest = shown.length ? shown[0].date : '', foldDefault = per === '0' || +per >= 168;
+  const folded = d => (d in dayState ? dayState[d] : foldDefault && d !== newest) && !(cur && cur.date === d);
+  let html = '', day = '';
+  for (const it of shown) {
+    if (it.date !== day) { day = it.date; html += `<div class="day" data-d="${day}">${folded(day) ? '▸' : '▾'} ${day} · ${counts[day]}</div>`; }
+    if (folded(day)) continue;
+    html += `<div class="item${cur && cur.id === it.id ? ' sel' : ''}" data-id="${it.id}" title="${it.name}"><span class="t">${it.time}</span><span class="c">${it.camera}</span>${it.has_map ? `<span class="a">${it.alarm_s ? '⚑ ' + it.alarm_s.toFixed(0) + ' s' : ''}</span>` : '<span class="a" style="color:var(--dim)">nincs térkép</span>'}</div>`;
+  }
+  $('list').innerHTML = html || '<div style="color:var(--dim);padding:12px">Nincs találat.' + (per !== '0' ? ' <a href="#" id="showall" style="color:var(--acc)">Minden időszak</a>' : '') + '</div>';
+  $('list').querySelectorAll('.item').forEach(e => e.onclick = () => select(items.find(i => i.id === e.dataset.id), true));
+  $('list').querySelectorAll('.day').forEach(e => e.onclick = () => { dayState[e.dataset.d] = !folded(e.dataset.d); const sc = $('list').scrollTop; applyFilters(); $('list').scrollTop = sc; });
+  const sa = $('showall'); if (sa) sa.onclick = ev => { ev.preventDefault(); $('fper').value = '0'; $('fper').dispatchEvent(new Event('input')); };
+  $('count').textContent = shown.length + ' / ' + items.length + ' felvétel';
+  try { localStorage.setItem('rc_filters', JSON.stringify({cam, d0, d1, t0, t1, mp, per})); } catch (e) {}
+}
+function restoreFilters() {
+  try { const f = JSON.parse(localStorage.getItem('rc_filters') || '{}');
+    $('fd0').value = f.d0 || ''; $('fd1').value = f.d1 || ''; $('ft0').value = f.t0 || ''; $('ft1').value = f.t1 || ''; $('fmap').checked = !!f.mp; } catch (e) {}
+}
+['fcam','fd0','fd1','ft0','ft1','fmap'].forEach(id => $(id).addEventListener('input', applyFilters));
+$('fper').addEventListener('input', async () => { await ensureRange(); applyFilters(); });
+$('freset').onclick = async () => { $('fcam').value = FIXCAM; $('fper').value = defaultPeriod(); for (const id of ['fd0','fd1','ft0','ft1']) $(id).value = ''; $('fmap').checked = false; await ensureRange(); applyFilters(); };
+// ---- map ----------------------------------------------------------------------
+// frames without a score: 1 = key frame, 16 = not analysed (reference too far back, rtspcam --max-ref-dist)
+const SKIPF = 1 | 16;
+let thr = 1, yTop = 10, metric = [], hdr = null, tms = [], cl = [], bl = [], fl = [], off = [], cnt = [], body = null, bodyDv = null, vdur = 0;
+async function loadMap(it) {
+  hdr = null; tms = []; body = null;
+  if (!it.has_map) return;
+  const r = await fetch('/api/map?id=' + encodeURIComponent(it.id));
+  if (!r.ok) return;
+  const buf = await r.arrayBuffer(), dv = new DataView(buf), hl = dv.getUint32(0, true);
+  hdr = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hl)));
+  const base = 4 + hl; body = buf; bodyDv = dv;
+  tms = []; cl = []; bl = []; fl = []; off = []; cnt = [];
+  for (let p = base; p + 11 <= buf.byteLength;) {
+    const n = dv.getUint16(p + 9, true);
+    if (p + 11 + 3*n > buf.byteLength) break;
+    tms.push(dv.getUint32(p, true)); cl.push(dv.getUint16(p + 4, true)); bl.push(dv.getUint16(p + 6, true));
+    fl.push(dv.getUint8(p + 8)); off.push(p + 11); cnt.push(n); p += 11 + 3*n;
+  }
+  vdur = tms.length ? (tms[tms.length-1] + 40) / 1000 : 0;
+  const useC = hdr.params.min_cluster > 0; thr = useC ? hdr.params.min_cluster : hdr.params.min_blocks; metric = useC ? cl : bl;
+  const vals = metric.filter((x, i) => !(fl[i] & SKIPF)).sort((a, b) => a - b);
+  yTop = Math.max(thr * 1.6, vals[Math.floor(vals.length * 0.995)] || 1, 10);
+  setAspect(hdr.w, hdr.h);
+}
+function idxIn(arr, t) {                       // last record whose time is <= t (8 ms tolerance)
+  const ms = t * 1000 + 8; let lo = 0, hi = arr.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (arr[mid] <= ms) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+function frameAt(t) {
+  if (!tms.length) return -1;
+  return idxIn(tms, t);
+}
+// ---- player -------------------------------------------------------------------
+const v = $('v'), ov = $('ov'), octx = ov.getContext('2d'), tl = $('tl'), tctx = tl.getContext('2d');
+function setAspect(w, h) { if (!w || !h) return; $('wrap').style.aspectRatio = w + ' / ' + h; $('stage').style.setProperty('--ar', w / h); }
+let loading = false, curFrame = -1, mediaT = 0, haveRvfc = 'requestVideoFrameCallback' in v;
+// Time of the picture that is really on screen. After a seek the <video> shows the old picture for a moment while currentTime already has the new value
+// (frame stepping: ~0.1 s); everything drawn over/with the picture (map cells, autozoom view, charts) must not run ahead of it, so while a seek is pending
+// the time of the last shown picture is kept, until a new picture is presented (frame callback; 250 ms after "seeked" as a fallback, e.g. when the seek lands on the same picture).
+let seekPending = false, heldT = 0, heldMedia = -1, seekTimer = 0, cbNow = 0, cbMedia = 0;
+const vt = () => {
+  if (seekPending) return heldT;
+  return heldT = haveRvfc && !v.paused && Math.abs(mediaT - v.currentTime) < 0.5 ? mediaT : v.currentTime;     // (a stale mediaT, e.g. after a source change, is ignored)
+};
+// While playing the autozoom view follows a continuous time (the last presented picture's time + the time since then), not the picture's own time: the
+// pictures arrive at the camera's frame rate (7-12 fps), a view that only changes with each of them jumps, and any small mismatch between the view and
+// the picture change shows as stutter. Paused (frame stepping) it is the shown picture's time.
+const viewT = () => haveRvfc && !v.paused && !seekPending && cbNow && Math.abs(cbMedia - v.currentTime) < 0.5
+  ? Math.min(cbMedia + (performance.now() - cbNow) / 1000 * v.playbackRate, cbMedia + 0.3 * Math.max(1, v.playbackRate)) : vt();
+const seekDone = () => { if (seekPending) { seekPending = false; clearTimeout(seekTimer); dirty = true; } };
+v.addEventListener('seeking', () => { if (!seekPending) { seekPending = true; heldMedia = mediaT; } clearTimeout(seekTimer); seekTimer = setTimeout(seekDone, 1500); });   // (safety net)
+v.addEventListener('seeked', () => { clearTimeout(seekTimer); seekTimer = setTimeout(seekDone, haveRvfc ? 250 : 0); });
+// (a frame callback with another picture than the one that was on screen when the seek began means the new picture is there; the callback also draws
+// everything at once, in the same display frame as the new picture: map cells, autozoom view and charts then change together with it, not a frame later)
+if (haveRvfc) { const rv = (now, md) => { mediaT = cbMedia = md.mediaTime; cbNow = performance.now(); if (seekPending && md.mediaTime !== heldMedia) seekDone(); drawAll(); v.requestVideoFrameCallback(rv); }; v.requestVideoFrameCallback(rv); }
+async function select(it, setHash) {
+  if (cur && (cur.camera !== it.camera || $('autozoom').checked)) { followSig = ''; zoom = 1; applyZoom(); }   // a new camera or an autozoom view starts at 1x
+  cur = it; if (setHash) location.hash = encodeURIComponent(it.id);
+  document.querySelectorAll('.item').forEach(e => e.classList.toggle('sel', e.dataset.id === it.id));
+  $('msg').textContent = 'Betöltés… (az első megnyitásnál a fájl előkészítése pár másodperc)'; $('msg').style.display = 'flex';
+  v.pause(); curFrame = -1; loading = true; dirty = true;
+  vecs = null; vecLoading = false; vecError = false; follow = null; followSig = '';
+  for (const o of $('ovmode').options) o.disabled = o.value !== 'cells' && !it.has_vec;
+  if (tuneOn && !it.has_vec) tuneClose('nincs .mvvec ehhez a felvételhez – a hangolás ki van kapcsolva');
+  if ($('ovmode').value !== 'cells' || tuneOn) loadVec(it);
+  $('modebadge').textContent = tuneOn ? 'HANGOLÁS · .mvvec + csúszkák' : 'rögzítő · .mvmap'; $('tunebtn').disabled = !it.has_vec; $('tunebtn').title = it.has_vec ? 'a riasztási paraméterek hangolása a .mvvec-ből, csúszkákkal (a .mvmap-et ilyenkor nem használja)' : 'ehhez a felvételhez nincs .mvvec (c/rtspcam --vectors)';
+  await loadMap(it);
+  v.src = '/video?id=' + encodeURIComponent(it.id);
+  v.playbackRate = +$('speed').value;
+  const notes = [it.has_map ? '' : 'nincs .mvmap – overlay nélkül', it.has_vec ? '' : 'nincs .mvvec – a hangolás ehhez nem elérhető'].filter(Boolean).join(' · ');
+  $('info').textContent = notes; $('inforow').style.display = notes ? '' : 'none';
+  dirty = true;
+  try { await v.play(); } catch (e) {}
+}
+v.addEventListener('loadeddata', () => { $('msg').style.display = 'none'; loading = false; dirty = true; });
+v.addEventListener('loadedmetadata', () => setAspect(v.videoWidth, v.videoHeight));
+v.addEventListener('error', () => { $('msg').textContent = 'A videó nem tölthető be.'; $('msg').style.display = 'flex'; });
+v.addEventListener('play', () => $('play').textContent = '❚❚ Szünet');
+v.addEventListener('pause', () => $('play').textContent = '▶ Lejátszás');
+v.addEventListener('ended', () => { if (!$('auto').checked || !cur) return;
+  const nxt = shown.filter(i => i.camera === cur.camera && i.ts > cur.ts).sort((a,b) => a.ts - b.ts)[0]; if (nxt) select(nxt, true); });
+$('play').onclick = () => { if (!cur) return; if (v.ended) v.currentTime = 0; v.paused ? v.play() : v.pause(); };
+// ---- zoom (wheel, at the cursor) and pan (drag); double click resets ----
+const ZMAX = 12;
+let zoom = 1, panX = 0, panY = 0, suppressClick = false;
+function applyZoom() {
+  const r = $('wrap').getBoundingClientRect();
+  zoom = Math.min(ZMAX, Math.max(1, zoom));
+  if (zoom === 1) { panX = panY = 0; }
+  panX = Math.min(0, Math.max(r.width - r.width * zoom, panX));       // the picture always covers the frame
+  panY = Math.min(0, Math.max(r.height - r.height * zoom, panY));
+  v.style.transform = zoom === 1 ? '' : `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  $('wrap').classList.toggle('zoomed', zoom > 1);
+  const zi = $('zoomind'); zi.style.display = zoom > 1 ? 'block' : 'none'; zi.textContent = zoom.toFixed(1) + ($('autozoom').checked ? '× · autozoom' : '× · dupla kattintás: vissza');
+  dirty = true;
+}
+$('wrap').addEventListener('wheel', e => {
+  e.preventDefault(); $('autozoom').checked = false;
+  const r = $('wrap').getBoundingClientRect(), cx = e.clientX - r.left, cy = e.clientY - r.top;
+  const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1);
+  const nz = Math.min(ZMAX, Math.max(1, zoom * Math.exp(-dy * 0.0015)));
+  if (nz === zoom) return;
+  const k = nz / zoom; panX = cx - (cx - panX) * k; panY = cy - (cy - panY) * k; zoom = nz;   // keep the point under the cursor fixed
+  applyZoom();
+}, {passive: false});
+$('wrap').addEventListener('mousedown', e => {
+  if (zoom <= 1 || e.button !== 0 || drawZone) return;
+  $('autozoom').checked = false;
+  const sx = e.clientX, sy = e.clientY, px0 = panX, py0 = panY; let moved = false;
+  $('wrap').classList.add('panning');
+  const mv = ev => { const dx = ev.clientX - sx, dy = ev.clientY - sy; if (!moved && Math.hypot(dx, dy) < 3) return; moved = true; panX = px0 + dx; panY = py0 + dy; applyZoom(); };
+  const up = () => { removeEventListener('mousemove', mv); removeEventListener('mouseup', up); $('wrap').classList.remove('panning'); if (moved) suppressClick = true; };
+  addEventListener('mousemove', mv); addEventListener('mouseup', up); e.preventDefault();
+});
+$('wrap').addEventListener('dblclick', () => { $('autozoom').checked = false; zoom = 1; applyZoom(); });
+
+// ---- autozoom: follow the alarm (red) cells while playing ----
+// Per analysed frame the bounding box of the red cells (rec. mode: from the .mvmap, tuning mode: from the .mvvec and the sliders) gives a view of about twice its
+// size; the sequence of views (with a zoom-out to the whole picture before, after and in the gaps of the motion) is sampled every 40 ms and smoothed with a Gaussian
+// (the whole clip is known, so the camera "looks ahead"), then played back by time. A manual zoom or drag switches it off.
+let follow = null, followSig = '';
+const FOLLOW = {step: 0.04, sigma: 0.75, margin: 2.0, minFrac: 0.25};
+// bounding box of the cells, without the outermost 3% on each side (a few stray cells far from the rest must not blow the box up)
+function trimBox(xs, ys) {
+  const n = xs.length; if (!n) return null;
+  const q = (a, p) => { const c = a.slice().sort((x, y) => x - y); return c[Math.min(n - 1, Math.max(0, Math.round(p * (n - 1))))]; }, k = n >= 30 ? 0.03 : 0;
+  return {x0: q(xs, k), y0: q(ys, k), x1: q(xs, 1 - k) + 16, y1: q(ys, 1 - k) + 16};
+}
+function followPoints() {
+  const pts = []; let W = 0, H = 0;
+  if (tuneOn && vecs && tA) {
+    W = vecs.w; H = vecs.h;
+    for (let i = 0; i < vecs.t.length; i++) { if (!vecs.has[i] || tA.over[i] || tA.cluster[i] < TP.min_cluster) continue;
+      const r = tuneAnalyze(i, true), xs = [], ys = [];
+      for (const idx of r.act) if (r.sizes[tlab[idx]] >= TP.min_cluster) { xs.push(((idx % tGW) - 1) * 16); ys.push((((idx / tGW) | 0) - 1) * 16); }
+      const b = trimBox(xs, ys); if (b) pts.push({t: vecs.t[i] / 1000, ...b}); }
+  } else if (!tuneOn && hdr && tms.length) {
+    W = hdr.w; H = hdr.h;
+    for (let i = 0; i < tms.length; i++) { if ((fl[i] & SKIPF) || !cnt[i]) continue; const xs = [], ys = [];
+      for (let k = 0; k < cnt[i]; k++) { if (bodyDv.getUint8(off[i] + 3 * k + 2) !== 3) continue;
+        const c = bodyDv.getUint16(off[i] + 3 * k, true); xs.push((c % hdr.gw) * 16); ys.push(Math.floor(c / hdr.gw) * 16); }
+      const b = trimBox(xs, ys); if (b) pts.push({t: tms[i] / 1000, ...b}); }
+  }
+  return {pts, W, H};
+}
+function followBuild() {
+  // the length comes from the data (map / vectors), not from the <video>: the browser (Firefox with fragmented MP4) may report a shorter duration at this point
+  const {pts, W, H} = followPoints(), last = tuneOn ? (vecs && vecs.t.length ? vecs.t[vecs.t.length - 1] : 0) : (tms.length ? tms[tms.length - 1] : 0), T = Math.max(dur(), last / 1000 + 1);
+  if (!W || !T) return null;        // data not there yet: try again later
+  const id = cur.id + (tuneOn ? '|t' : '|r') + '|' + (tuneOn ? (vecs ? vecs.t.length : 0) : tms.length);      // which recording/data the track belongs to
+  if (!pts.length) return {none: true, id};
+  const F = FOLLOW, full = {cx: W / 2, cy: H / 2, vw: W}, ar = W / H, wp = [];
+  const view = p => { const bw = p.x1 - p.x0, bh = p.y1 - p.y0;
+    return {cx: (p.x0 + p.x1) / 2, cy: (p.y0 + p.y1) / 2, vw: Math.min(W, Math.max(F.margin * bw, F.margin * bh * ar, F.minFrac * W, W / ZMAX))}; };
+  wp.push({t: pts[0].t - 0.5, ...full});
+  for (let i = 0; i < pts.length; i++) {
+    // (no zoom-out between two events of the same recording: the view moves slowly from one to the next, also across pauses where the person stands still)
+    wp.push({t: pts[i].t, ...view(pts[i])}); }
+  wp.push({t: pts[pts.length - 1].t + 0.5, ...full});
+  const n = Math.ceil(T / F.step) + 2, a = [new Float64Array(n), new Float64Array(n), new Float64Array(n)]; let j = 0;
+  for (let s = 0; s < n; s++) { const t = s * F.step; while (j + 1 < wp.length && wp[j + 1].t <= t) j++;
+    const p = wp[j], q = wp[Math.min(j + 1, wp.length - 1)], u = q.t > p.t ? Math.min(1, Math.max(0, (t - p.t) / (q.t - p.t))) : 0;
+    const pre = t < wp[0].t, L = x => pre ? full[x] : p[x] + (q[x] - p[x]) * u;
+    a[0][s] = L('cx'); a[1][s] = L('cy'); a[2][s] = L('vw'); }
+  const h = Math.ceil(3 * F.sigma / F.step), ker = []; for (let k = -h; k <= h; k++) ker.push(Math.exp(-0.5 * (k * F.step / F.sigma) ** 2));
+  const sm = a.map(src => { const out = new Float64Array(n);
+    for (let s = 0; s < n; s++) { let acc = 0, w = 0; for (let k = -h; k <= h; k++) { const q = s + k; if (q < 0 || q >= n) continue; acc += src[q] * ker[k + h]; w += ker[k + h]; } out[s] = acc / w; }
+    return out; });
+  return {id, W, H, cx: sm[0], cy: sm[1], vw: sm[2], n};
+}
+function followApply() {
+  if (!$('autozoom').checked || loading || !cur) return;
+  if (follow && cur && !follow.id.startsWith(cur.id + (tuneOn ? '|t' : '|r') + '|')) { follow = null; followSig = ''; }       // a track of another recording or source: never use it
+  if (!follow) follow = followBuild();
+  if (!follow) return;
+  if (follow.none) { if (zoom !== 1) { followSig = ''; zoom = 1; applyZoom(); } return; }
+  const r = $('wrap').getBoundingClientRect(), t = Math.max(0, viewT()) / FOLLOW.step, s = Math.min(follow.n - 2, Math.floor(t)), u = Math.min(1, t - s);
+  const g = arr => arr[s] + (arr[s + 1] - arr[s]) * u, W = follow.W, H = follow.H;
+  const vw = Math.min(W, Math.max(W / ZMAX, g(follow.vw))), vh = vw * H / W;
+  const vx = Math.min(W - vw, Math.max(0, g(follow.cx) - vw / 2)), vy = Math.min(H - vh, Math.max(0, g(follow.cy) - vh / 2));
+  const z = W / vw, px = -(vx / W) * r.width * z, py = -(vy / H) * r.height * z, sig = [z, px, py, r.width].map(x => x.toFixed(2)).join();
+  if (sig === followSig) return;
+  followSig = sig; zoom = z; panX = px; panY = py; applyZoom();
+}
+$('autozoom').addEventListener('change', () => { follow = null; followSig = ''; if (!$('autozoom').checked) { zoom = 1; applyZoom(); } else dirty = true; });
+v.onclick = () => { if (suppressClick) { suppressClick = false; return; } $('play').click(); };
+$('speed').onchange = () => v.playbackRate = +$('speed').value;
+addEventListener('keydown', e => { if (e.code === 'Space' && !/INPUT|SELECT|BUTTON/.test(e.target.tagName)) { e.preventDefault(); $('play').click(); } });
+// ---- frame stepping: pause and seek to the middle of the neighbouring frame (the map holds the frame times) ----
+let stepIdx = -1;                                   // last requested frame, so held keys / fast clicks do not stack up on a lagging currentTime
+function stepFrame(d) {
+  if (!cur) return;
+  v.pause();
+  const FT = tuneOn && vecs ? vecs.t : tms;          // tuning mode does not use the .mvmap, not even for frame times
+  if (!FT.length) { v.currentTime = Math.max(0, Math.min(dur(), v.currentTime + d * 0.04)); return; }   // no map: assume 25 fps
+  const base = v.seeking && stepIdx >= 0 ? stepIdx : idxIn(FT, v.currentTime);
+  const f = Math.min(FT.length - 1, Math.max(0, base + d)); stepIdx = f;
+  const nxt = f + 1 < FT.length ? FT[f + 1] : FT[f] + (FT[f] - FT[Math.max(0, f - 1)] || 40);
+  v.currentTime = (FT[f] + (nxt - FT[f]) / 2) / 1000;
+  dirty = true;
+}
+$('prev').onclick = () => stepFrame(-1); $('next').onclick = () => stepFrame(1);
+addEventListener('keydown', e => { if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.code === 'ArrowLeft') { e.preventDefault(); stepFrame(e.shiftKey ? -10 : -1); } else if (e.code === 'ArrowRight') { e.preventDefault(); stepFrame(e.shiftKey ? 10 : 1); } });
+const dur = () => (isFinite(v.duration) && v.duration > 0 ? v.duration : vdur) || (cur ? cur.duration : 0);
+function seekFromEvent(e) { const r = tl.getBoundingClientRect(); if (cur) v.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * dur(); }
+tl.addEventListener('mousedown', e => { seekFromEvent(e); const mv = seekFromEvent, up = () => { removeEventListener('mousemove', mv); removeEventListener('mouseup', up); };
+  addEventListener('mousemove', mv); addEventListener('mouseup', up); });
+// ---- drawing ------------------------------------------------------------------
+let dirty = true;
+function fit(c) { const r = c.getBoundingClientRect(), d = devicePixelRatio || 1; const w = Math.round(r.width*d), h = Math.round(r.height*d);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; return true; } return false; }
+// ---- motion field (.mvvec): one byte per 16x16 cell, low 4 bits = length in px, high 4 bits = direction in 22.5 degree steps ----
+let vecs = null, vecLoading = false, vecError = false;
+const VEC_SCALE = 2;      // line length in video pixels per pixel of vector length
+const effMode = () => { const m = $('ovmode').value; return (m !== 'cells' && !(cur && cur.has_vec)) ? 'cells' : m; };   // no .mvvec: fall back to the cells
+async function loadVec(it) {
+  if (!it.has_vec || vecLoading) return;
+  vecs = null; vecError = false; vecLoading = true; dirty = true; const id = it.id;
+  try {
+    const hd = await (await fetch('/api/vecinfo?id=' + encodeURIComponent(id))).json();
+    const r = await fetch('/api/vec?id=' + encodeURIComponent(id)); if (!r.ok) throw new Error('HTTP ' + r.status);
+    const buf = new Uint8Array(await r.arrayBuffer()), dv = new DataView(buf.buffer), n = hd.gw * hd.gh, t = [], has = [], offs = [], fbytes = [], vbytes = [];
+    // record: u32 t_ms, u8 has_grid, u32 frame_bytes, u32 vcl_bytes, then gw*gh bytes if has_grid (format 2 only)
+    const rh = 13;
+    for (let p = 0; p + rh <= buf.length; ) { const g = buf[p + 4], end = p + rh + (g ? n : 0); if (end > buf.length) break;
+      t.push(dv.getUint32(p, true)); has.push(g); offs.push(p + rh); fbytes.push(dv.getUint32(p + 5, true)); vbytes.push(dv.getUint32(p + 9, true)); p = end; }
+    if (cur && cur.id === id) vecs = {t, has, offs, buf, gw: hd.gw, gh: hd.gh, w: hd.w, h: hd.h, fbytes, vbytes};
+  } catch (e) { vecs = null; vecError = true; }
+  vecLoading = false; dirty = true;
+  if (tuneOn && vecs) tuneRecompute(1);
+}
+function drawVectors() {
+  if (!vecs || loading || !$('showov').checked || effMode() === 'cells') return;
+  const ms = vt() * 1000 + 8; let lo = 0, hi = vecs.t.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (vecs.t[mid] <= ms) lo = mid; else hi = mid - 1; }
+  let i = lo; for (let k = 0; k < 8 && i > 0 && !vecs.has[i]; k++) i--;     // key / not analysed frame: show the last grid
+  if (!vecs.has[i]) return;
+  const W = ov.width, H = ov.height, s = Math.min(W / vecs.w, H / vecs.h), ox = (W - vecs.w * s) / 2, oy = (H - vecs.h * s) / 2, dpr = devicePixelRatio || 1;
+  octx.setTransform(zoom, 0, 0, zoom, panX * dpr, panY * dpr);               // same zoom/pan as the <video>
+  const g = vecs.buf, base = vecs.offs[i], gw = vecs.gw, n = gw * vecs.gh, groups = Array.from({length: 16}, () => []);
+  for (let c = 0; c < n; c++) { const b = g[base + c]; if (b & 15) groups[b >> 4].push(c, b & 15); }
+  octx.lineWidth = 1.6 * dpr / zoom; octx.lineCap = 'round'; const rad = 1.9 * dpr / zoom;
+  for (let d = 0; d < 16; d++) { const L = groups[d]; if (!L.length) continue;
+    const col = `hsl(${d * 22.5}, 95%, 62%)`, ca = Math.cos(d * Math.PI / 8), sa = Math.sin(d * Math.PI / 8);
+    octx.strokeStyle = col; octx.fillStyle = col; octx.beginPath();
+    for (let k = 0; k < L.length; k += 2) { const c = L[k], len = L[k + 1] * VEC_SCALE * s, x = ox + ((c % gw) * 16 + 8) * s, y = oy + (((c / gw) | 0) * 16 + 8) * s; octx.moveTo(x, y); octx.lineTo(x + ca * len, y + sa * len); }
+    octx.stroke(); octx.beginPath();                                          // dot at the start = the cell the vector belongs to
+    for (let k = 0; k < L.length; k += 2) { const c = L[k], x = ox + ((c % gw) * 16 + 8) * s, y = oy + (((c / gw) | 0) * 16 + 8) * s; octx.moveTo(x + rad, y); octx.arc(x, y, rad, 0, 6.2832); }
+    octx.fill(); }
+}
+const escHtml = t => String(t).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+const hudName = () => cur ? '<span style="color:var(--fg)">' + escHtml(cur.name) + '.mp4</span> · ' : '';   // the file name leads the time line
+const hudNameOnly = () => cur ? '<span style="color:var(--fg)">' + escHtml(cur.name) + '.mp4</span>' : '';
+function drawOverlay() {
+  if (tuneOn) return drawOverlayTune();
+  fit(ov); octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, ov.width, ov.height);
+  if (loading) { $('hud').innerHTML = hudNameOnly(); return; }   // no stale map over the black loading screen
+  curFrame = frameAt(vt());
+  if (!hdr || curFrame < 0) { $('hud').innerHTML = hudNameOnly(); return; }
+  const flags = fl[curFrame];
+  // not analysed (--max-ref-dist): show the map of the last analysed frame instead of flickering
+  let f = curFrame;
+  for (let k = 0; k < 8 && f > 0 && (fl[f] & 16); k++) f--;
+  if ($('showov').checked && effMode() !== 'vec' && !(fl[f] & SKIPF) && cnt[f]) {
+    // letterbox-aware scale: the <video> uses object-fit: contain
+    const W = ov.width, H = ov.height, s = Math.min(W / hdr.w, H / hdr.h), ox = (W - hdr.w*s)/2, oy = (H - hdr.h*s)/2, only = $('onlybest').checked;
+    const dpr = devicePixelRatio || 1; octx.setTransform(zoom, 0, 0, zoom, panX * dpr, panY * dpr);   // same zoom/pan as the <video>
+    for (let i = 0; i < cnt[f]; i++) { const c = bodyDv.getUint16(off[f] + 3*i, true), l = bodyDv.getUint8(off[f] + 3*i + 2);
+      if (only && l === 1) continue;
+      const x = (c % hdr.gw) * 16, y = Math.floor(c / hdr.gw) * 16;
+      octx.fillStyle = l === 3 ? 'rgba(255,77,77,.65)' : l === 2 ? 'rgba(255,159,26,.6)' : 'rgba(255,210,63,.4)';
+      octx.fillRect(ox + x*s, oy + y*s, 16*s + 1, 16*s + 1); }
+  }
+  drawVectors();
+  const t = v.currentTime, T = dur();
+  const vst = $('ovmode').value === 'cells' ? '' : vecLoading ? ' · vektorok betöltése…' : (cur && !cur.has_vec) ? ' · nincs .mvvec ehhez a felvételhez' : vecError ? ' · a vektorok nem tölthetők be' : '';
+  $('hud').innerHTML = `${hudName()}${fmtClock(t)} / ${fmtClock(T)} · kocka ${curFrame + 1}/${tms.length}${vst}` + (flags & 4 ? ' · <span style="color:var(--rec);font-weight:700">⚑ riasztás</span>' : '') + (flags & 2 ? ' · mozgás' : '');
+}
+const fmtClock = s => { s = Math.max(0, s || 0); return Math.floor(s/60) + ':' + (s % 60).toFixed(1).padStart(4, '0'); };
+function drawTimeline() {
+  if (tuneOn && vecs) return drawTuneTimeline();
+  fit(tl); const W = tl.width, H = tl.height; tctx.clearRect(0, 0, W, H);
+  const T = dur(); if (!cur || !T) return;
+  const X = t => t / T * W;
+  if (tms.length) {
+    const arr = metric;
+    const bw = Math.max(1, W / tms.length);
+    // alarm background: ONE rectangle per run of consecutive alarm records (from the first alarm record to the start of the next,
+    // non-alarm one), rounded to whole pixels - per-record rectangles of a fixed width left dark gaps and lighter overlaps
+    // wherever the camera's frame spacing was uneven. Nothing is drawn outside the alarm runs (pre-/post-roll stay unmarked).
+    for (let i = 0; i < tms.length; ) {
+      if (!(fl[i] & 4)) { i++; continue; }
+      let j = i; while (j + 1 < tms.length && (fl[j + 1] & 4)) j++;
+      const x0 = Math.round(X(tms[i] / 1000)), x1 = Math.max(x0 + 1, Math.round(X((j + 1 < tms.length ? tms[j + 1] : tms[j] + 40) / 1000)));
+      tctx.fillStyle = 'rgba(53,196,106,.35)'; tctx.fillRect(x0, 0, x1 - x0, H);
+      tctx.fillStyle = '#35c46a'; tctx.fillRect(x0, 0, x1 - x0, 5 * (devicePixelRatio || 1));
+      i = j + 1;
+    }
+    for (let i = 0; i < tms.length; i++) { if (fl[i] & SKIPF) continue; const h = Math.round(Math.min(1, arr[i] / yTop) * (H - 8));
+      // a bar covers exactly its own frame slot (from this record to the next one, analysed or not) in whole pixels: no 1 px seams between
+      // neighbouring bars, while the slots of records without data stay empty (the comb pattern)
+      const x0 = Math.round(X(tms[i] / 1000)), x1 = Math.max(x0 + 1, Math.round(X((i + 1 < tms.length ? tms[i + 1] : tms[i] + 40) / 1000)));
+      tctx.fillStyle = (fl[i] & 2) ? '#ff6b4d' : '#5b6577'; tctx.fillRect(x0, H - h, x1 - x0, h); }
+    const ty = H - Math.min(1, thr / yTop) * (H - 8);
+    tctx.strokeStyle = '#ffd23f'; tctx.setLineDash([5, 4]); tctx.beginPath(); tctx.moveTo(0, ty); tctx.lineTo(W, ty); tctx.stroke(); tctx.setLineDash([]);
+  }
+  tctx.fillStyle = '#fff'; tctx.fillRect(X(v.currentTime), 0, 2, H);
+}
+// ================= tuning mode: everything is computed from the .mvvec and the sliders (the .mvmap is not used) =================
+let tuneOn = false, drawZone = false, tzones = [], tpreview = null;
+const TUNE_SCALE_MAX = 500;
+const TP = {mv_min: 5, min_cluster: 40, global_limit: 0.6, window: 15, trigger_frames: 4, pre_roll: 5, post_roll: 5};
+const TDEFS = [
+  ['mv_min', 1, 15, 1, 'mv_min – min. vektorhossz pixelben. Egész szám: a .mvvec cellánként a leghosszabb vektor hosszát tárolja lefelé kerekítve.'],
+  ['min_cluster', 1, 400, 1, 'min_cluster – ekkora összefüggő mozgó cellacsoportnál (16×16-os cellák) „mozgásos" a kocka.'],
+  ['global_limit', 0.05, 1, 0.05, 'global_limit – ha a kép ennél nagyobb hányadán van mozgás (villanás, IR-váltás), a kocka nem számít.'],
+  ['window', 2, 60, 1, 'window – az indításhoz ennyi utolsó elemzett kockát vizsgál.'],
+  ['trigger_frames', 1, 60, 1, 'trigger_frames – ennyi „mozgásos" kocka kell az ablakból (window) az indításhoz.'],
+  ['pre_roll', 0, 20, 0.5, 'pre_roll – másodperc: ennyivel a mozgás előtt kezdődik a felvétel (itt kulcskocka-igazítás nélkül).'],
+  ['post_roll', 0, 60, 0.5, 'post_roll – másodperc: az utolsó mozgás után ennyi ideig tart a felvétel (itt kulcskocka-igazítás nélkül).']];
+for (const [k, min, max, step, hint] of TDEFS) {
+  const d = document.createElement('div'); d.className = 'ctl';
+  d.title = hint; d.innerHTML = `<label>${k}<b id="tv_${k}"></b></label><input type="range" id="ti_${k}" min="${min}" max="${max}" step="${step}">`;
+  $('tsliders').appendChild(d);
+  d.querySelector('input').addEventListener('input', e => { TP[k] = +e.target.value; tuneRecompute(k === 'mv_min' || k === 'min_cluster' || k === 'global_limit' ? 1 : 2); });
+}
+let tA = null, tGW = 0, tmask = null, tmark = null, tvis = null, tlab = null, tstamp = 0;
+const NB8 = g => [-g - 1, -g, -g + 1, -1, 1, g - 1, g, g + 1];
+function tuneSetup() { const cells = (vecs.gw + 2) * (vecs.gh + 2); tGW = vecs.gw + 2; tmark = new Uint32Array(cells); tvis = new Uint32Array(cells); tlab = new Int32Array(cells); tstamp = 0; }
+function tuneMask() {                     // cells whose centre is inside an ignore zone (the recorder tests the vector centres)
+  const gw = vecs.gw, n = gw * vecs.gh; tmask = new Uint8Array(n);
+  for (let c = 0; c < n; c++) { const x = ((c % gw) * 16 + 8) / vecs.w, y = (((c / gw) | 0) * 16 + 8) / vecs.h;
+    for (const z of tzones) if (x >= z[0] && x < z[2] && y >= z[1] && y < z[3]) { tmask[c] = 1; break; } }
+}
+// active cells of record i (cell byte: low 4 bits = length of the longest vector >= mv_min) and their 8-connected groups
+function tuneAnalyze(i, full) {
+  const g = vecs.buf, base = vecs.offs[i], gw = vecs.gw, n = gw * vecs.gh, T = TP.mv_min, act = []; tstamp++;
+  for (let c = 0; c < n; c++) if ((g[base + c] & 15) >= T && !tmask[c]) { const idx = (((c / gw) | 0) + 1) * tGW + (c % gw) + 1; tmark[idx] = tstamp; act.push(idx); }
+  const nb = NB8(tGW); let best = 0, bestId = -1, id = 0; const sizes = [0];
+  for (const c0 of act) { if (tvis[c0] === tstamp) continue; id++; let cnt = 0; const st = [c0]; tvis[c0] = tstamp;
+    while (st.length) { const q = st.pop(); cnt++; if (full) tlab[q] = id;
+      for (const d of nb) { const r = q + d; if (tmark[r] === tstamp && tvis[r] !== tstamp) { tvis[r] = tstamp; st.push(r); } } }
+    sizes[id] = cnt; if (cnt > best) { best = cnt; bestId = id; } }
+  return {active: act.length, best, bestId, sizes, act};
+}
+function tuneRecompute(level) {
+  if (!vecs) return;
+  if (level >= 1) { if (!tmark || tmark.length !== (vecs.gw + 2) * (vecs.gh + 2)) tuneSetup(); tuneMask();
+    const N = vecs.t.length, cluster = new Int32Array(N), active = new Int32Array(N);
+    for (let i = 0; i < N; i++) if (vecs.has[i]) { const r = tuneAnalyze(i, false); cluster[i] = r.best; active[i] = r.active; }
+    const vals = Array.from(cluster).filter((x, i) => vecs.has[i]).sort((a, b) => a - b);
+    tA = {cluster, active, vals, sizeMov: new Uint8Array(N), moving: new Int8Array(N), trig: new Uint8Array(N), over: new Uint8Array(N), segs: [], runs: [], yTop: 10}; }
+  // state machine of the recorder over the analysed records (the others - key / skipped frames - leave it as it is)
+  const N = vecs.t.length, W = Math.max(2, TP.window), ring = new Int8Array(W), cells = vecs.gw * vecs.gh, sc = SZP.ratio > 0 && vecs.fbytes ? szCompute() : null;
+  let ptr = 0, filled = 0, sum = 0, movingNow = false, writer = false, segStart = 0, lastMotion = -1e9, runStart = null; const segs = [], runs = [];
+  for (let i = 0; i < N; i++) {
+    const t = vecs.t[i] / 1000; let m = -1;
+    if (vecs.has[i]) {
+      // two cues, OR-ed: the MV cluster, and (optional, size_ratio > 0) a P frame clearly bigger than the median; the global_limit veto applies to both
+      const okG = tA.active[i] / cells <= TP.global_limit, mvOk = tA.cluster[i] >= TP.min_cluster && okG, szOk = !!sc && okG && !sc.big[i] && sc.a[i] > SZP.ratio * sc.med[i];
+      m = (mvOk || szOk) ? 1 : 0; tA.sizeMov[i] = szOk && !mvOk ? 1 : 0;
+      if (filled < W) { ring[ptr] = m; ptr = (ptr + 1) % W; filled++; sum += m; } else { sum -= ring[ptr]; ring[ptr] = m; sum += m; ptr = (ptr + 1) % W; }
+      movingNow = sum >= TP.trigger_frames; if (m && (movingNow || writer)) lastMotion = t;
+    }
+    tA.moving[i] = m; tA.trig[i] = movingNow ? 1 : 0;
+    tA.over[i] = vecs.has[i] && tA.active[i] / cells > TP.global_limit ? 1 : 0;      // the picture moves (more than) global_limit: the frame does not count
+    if (movingNow && runStart === null) runStart = t; if (!movingNow && runStart !== null) { runs.push([runStart, t]); runStart = null; }
+    const want = movingNow || (t - lastMotion < TP.post_roll);
+    if (!writer && want) { writer = true; segStart = Math.max(0, t - TP.pre_roll); } else if (writer && !want) { segs.push([segStart, t]); writer = false; }
+  }
+  const tEnd = vecs.t.length ? vecs.t[N - 1] / 1000 : 0; if (writer) segs.push([segStart, tEnd]); if (runStart !== null) runs.push([runStart, tEnd]);
+  tA.segs = segs; tA.runs = runs;
+  // the scale follows the data but never goes above TUNE_SCALE_MAX: the min_cluster slider stops at 400, so a few huge values (camera shake,
+  // the whole picture moving) must not squash everything else; bars above the scale get a light cap
+  const yv = tA.vals; tA.yTop = Math.min(TUNE_SCALE_MAX, Math.max(TP.min_cluster * 1.6, yv[Math.floor(yv.length * 0.995)] || 1, 10));
+  if (level >= 1) { follow = null; followSig = ''; }
+  tuneUI(); dirty = true;
+}
+function tuneUI() {
+  for (const [k] of TDEFS) { $('ti_' + k).value = TP[k]; $('tv_' + k).textContent = TP[k]; }
+  $('ti_trigger_frames').max = TP.window; if (TP.trigger_frames > TP.window) { TP.trigger_frames = TP.window; $('ti_trigger_frames').value = TP.window; $('tv_trigger_frames').textContent = TP.window; }
+  $('zlist').innerHTML = tzones.map((z, i) => `<span class="zone">${z.map(x => x.toFixed(2)).join(', ')}<button data-i="${i}">×</button></span>`).join(' ') || '<span style="color:var(--dim);font-size:12px">nincs kizárt zóna</span>';
+  $('zlist').querySelectorAll('button').forEach(b => b.onclick = () => { tzones.splice(+b.dataset.i, 1); tuneRecompute(1); });
+  if (tA) {
+    const T = dur() || (vecs.t[vecs.t.length - 1] / 1000), sorted = tA.segs.slice().sort((a, b) => a[0] - b[0]); let rec = 0, end = -1;
+    for (const s of sorted) { const a = Math.max(s[0], end); if (s[1] > a) rec += s[1] - a; end = Math.max(end, s[1]); }
+    let alarm = 0; for (const r of tA.runs) alarm += r[1] - r[0];
+    let lim = 0; for (let i = 0; i < vecs.t.length; i++) if (tA.over[i] && tA.cluster[i] >= TP.min_cluster) lim++;
+    $('tstats').innerHTML = `Események: <b style="color:var(--rec)">${tA.segs.length}</b> · Rögzítene: <b style="color:var(--rec)">${rec.toFixed(1)} s</b> / ${T.toFixed(1)} s (<b>${T ? (100 * rec / T).toFixed(0) : 0}%</b>) · ebből riasztás ${alarm.toFixed(1)} s, előzmény/utózmény ${Math.max(0, rec - alarm).toFixed(1)} s` + (lim ? ` · <span style="color:#c26bff">global_limit miatt kiesett: <b>${lim}</b> kocka</span>` : '');
+  }
+  const n = $('tname').value || 'kamera', ig = tzones.map(z => z.map(x => +x.toFixed(4)).join(','));
+  $('tcmd').value = `c/rtspcam rtsp://KAMERA/primary/h264 -n ${n} -o ./rec --config configs/${n}.json\n\n# vagy explicit paraméterekkel:\nc/rtspcam rtsp://KAMERA/primary/h264 -n ${n} -o ./rec --mv-min ${TP.mv_min} --min-cluster ${TP.min_cluster} --global-limit ${TP.global_limit} --window ${TP.window} --trigger-frames ${TP.trigger_frames} --pre-roll ${TP.pre_roll} --post-roll ${TP.post_roll}` + ig.map(z => ` --ignore ${z}`).join('') + (SZP.ratio > 0 ? `\n\n# FIGYELEM: a méretarány-küszöb (${SZP.ratio}×) csak a hangolóban él, a rögzítő még nem ismeri` : '');
+}
+function drawTuneTimeline() {
+  fit(tl); const W = tl.width, H = tl.height, dpr = devicePixelRatio || 1; tctx.clearRect(0, 0, W, H);
+  const T = dur(); if (!cur || !T || !tA) return; const X = t => t / T * W, N = vecs.t.length, bw = Math.max(1, W / N);
+  const span = (a, b) => { const x0 = Math.round(X(a)); return [x0, Math.max(2, Math.round(X(b)) - x0)]; };
+  tctx.fillStyle = 'rgba(53,196,106,.14)'; for (const s of tA.segs) { const [x, w] = span(s[0], s[1]); tctx.fillRect(x, 0, w, H); }
+  for (const r of tA.runs) { const [x, w] = span(r[0], r[1]); tctx.fillStyle = 'rgba(53,196,106,.38)'; tctx.fillRect(x, 0, w, H); tctx.fillStyle = '#35c46a'; tctx.fillRect(x, 0, w, 5 * dpr); }
+  for (let i = 0; i < N; i++) { if (!vecs.has[i]) continue; const h = Math.round(Math.min(1, tA.cluster[i] / tA.yTop) * (H - 8)),
+    x0 = Math.round(X(vecs.t[i] / 1000)), x1 = Math.max(x0 + 1, Math.round(X((i + 1 < N ? vecs.t[i + 1] : vecs.t[i] + 40) / 1000)));
+    tctx.fillStyle = tA.over[i] ? '#c26bff' : tA.sizeMov[i] ? '#4aa8ff' : tA.moving[i] === 1 ? '#ff6b4d' : '#5b6577'; tctx.fillRect(x0, H - h, x1 - x0, h);
+    if (tA.sizeMov[i]) { tctx.fillStyle = '#4aa8ff'; tctx.fillRect(x0, H - Math.max(h, 8 * dpr), x1 - x0, Math.max(h, 8 * dpr)); }       // frame counted by its size only: blue, at least a short tick
+    if (tA.cluster[i] > tA.yTop) { tctx.fillStyle = '#fff'; tctx.fillRect(x0, H - h, x1 - x0, Math.min(h, 3 * dpr)); } }   // off the scale
+  const ty = H - Math.min(1, TP.min_cluster / tA.yTop) * (H - 8); tctx.strokeStyle = '#ffd23f'; tctx.setLineDash([5, 4]); tctx.beginPath(); tctx.moveTo(0, ty); tctx.lineTo(W, ty); tctx.stroke(); tctx.setLineDash([]);
+  tctx.fillStyle = '#ffd23f'; tctx.font = `${11 * dpr}px system-ui`; tctx.fillText('küszöb (hangolt)', 4, Math.max(12 * dpr, ty - 4));
+  if (tA.over.some(x => x)) { tctx.fillStyle = '#c26bff'; tctx.fillText('■ a kép mozgó része ≥ global_limit: a kocka nem számít', 4, 20 * dpr); }
+  if (tA.sizeMov.some(x => x)) { tctx.fillStyle = '#4aa8ff'; tctx.fillText('■ csak a kockaméret miatt mozgásos', 4, 34 * dpr); }
+  tctx.fillStyle = '#fff'; tctx.fillRect(X(v.currentTime), 0, 2, H);
+}
+function drawOverlayTune() {
+  fit(ov); octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, ov.width, ov.height);
+  if (loading) { $('hud').innerHTML = hudNameOnly(); return; }
+  if (!vecs || !tA) { $('hud').innerHTML = hudName() + (vecLoading ? 'vektorok betöltése…' : (vecError ? 'a vektorok nem tölthetők be' : '')); return; }
+  const i0 = idxIn(vecs.t, vt()); let i = i0; for (let k = 0; k < 8 && i > 0 && !vecs.has[i]; k++) i--;
+  curFrame = i0;
+  const W = ov.width, H = ov.height, s = Math.min(W / vecs.w, H / vecs.h), ox = (W - vecs.w * s) / 2, oy = (H - vecs.h * s) / 2, dpr = devicePixelRatio || 1;
+  octx.setTransform(zoom, 0, 0, zoom, panX * dpr, panY * dpr);
+  if ($('showov').checked && effMode() !== 'vec' && vecs.has[i]) {
+    const r = tuneAnalyze(i, true), only = $('onlybest').checked;      // same colours as the recorder's map: red >= threshold, orange = largest below it, yellow = the rest
+    for (const idx of r.act) { const id = tlab[idx], lvl = r.sizes[id] >= TP.min_cluster ? 3 : (id === r.bestId ? 2 : 1); if (only && lvl === 1) continue;
+      const gx = (idx % tGW) - 1, gy = ((idx / tGW) | 0) - 1;
+      // a frame the global_limit throws out (the picture moves too much, e.g. camera shake): its alarm cells are purple, like its bar on the timeline
+      octx.fillStyle = lvl === 3 ? (tA.over[i] ? 'rgba(194,107,255,.65)' : 'rgba(255,77,77,.65)') : lvl === 2 ? 'rgba(255,159,26,.6)' : 'rgba(255,210,63,.4)';
+      octx.fillRect(ox + gx * 16 * s, oy + gy * 16 * s, 16 * s + 1, 16 * s + 1); }
+  }
+  for (const z of tzones.concat(tpreview ? [tpreview] : [])) {
+    const x = ox + z[0] * vecs.w * s, y = oy + z[1] * vecs.h * s, w = (z[2] - z[0]) * vecs.w * s, h = (z[3] - z[1]) * vecs.h * s;
+    octx.fillStyle = 'rgba(20,20,30,.55)'; octx.fillRect(x, y, w, h); octx.strokeStyle = 'rgba(255,255,255,.55)'; octx.lineWidth = 1.5 * dpr / zoom; octx.setLineDash([6 * dpr / zoom, 4 * dpr / zoom]); octx.strokeRect(x, y, w, h); octx.setLineDash([]);
+  }
+  drawVectors();
+  const mv = tA.moving[i0], T = dur(), cl = vecs.has[i0] ? tA.cluster[i0] : null, t = vt();
+  const inSeg = tA.segs.some(s2 => t >= s2[0] && t <= s2[1]);
+  $('hud').innerHTML = `${hudName()}${fmtClock(v.currentTime)} / ${fmtClock(T)} · kocka ${i0 + 1}/${vecs.t.length}` + (cl === null ? ' · (nem elemzett kocka)' : ` · klaszter <b>${cl}</b> / ${TP.min_cluster} · mozog <b>${(100 * tA.active[i0] / (vecs.gw * vecs.gh)).toFixed(0)}%</b> / limit ${(100 * TP.global_limit).toFixed(0)}%`) + (tA.over[i0] ? ' · <span style="color:#c26bff;font-weight:700">global_limit: nem számít</span>' : '') + (vecs.fbytes && SZP.ratio > 0 ? (() => { const c = szCompute(); return ` · méret <b>${c.med[i0] ? (c.a[i0] / c.med[i0]).toFixed(2) : '-'}×</b> / ${SZP.ratio}×`; })() : '') + (tA.sizeMov[i0] ? ' · <span style="color:#4aa8ff;font-weight:700">MÉRET-MOZGÁS</span>' : '') + (mv === 1 && !tA.sizeMov[i0] ? ' · <span style="color:#ff6b4d;font-weight:700">MOZGÁS-KOCKA</span>' : '') + (tA.trig[i0] ? ' · <span style="color:var(--rec);font-weight:700">⚑ riasztás (hangolt)</span>' : '') + (inSeg && !tA.trig[i0] ? ' · <span style="color:var(--rec)">felvenné</span>' : '');
+}
+// --- open / close ---
+function tuneMode(on) {
+  follow = null; followSig = '';                                // the autozoom track depends on the data source
+  $('stage').classList.toggle('tuning', on);                    // the two-button mode switch, the picture badge and the timeline frame show which data is on screen
+  $('tunebtn').classList.toggle('on', on); $('recbtn').classList.toggle('on', !on); tl.classList.toggle('tuning', on);
+  const b = $('modebadge'); b.classList.toggle('tune', on); b.textContent = on ? 'HANGOLÁS · .mvvec + csúszkák' : 'rögzítő · .mvmap';
+}
+function tuneOpen() {
+  if (!cur || !cur.has_vec) return;
+  tuneOn = true; $('tunepanel').style.display = 'block'; tuneMode(true); if (!$('tname').value) $('tname').value = cur.camera;
+  if (!vecs) loadVec(cur); else tuneRecompute(1);
+  tuneLoadConfig(false); dirty = true;
+}
+function tuneClose(msg) {
+  tuneOn = false; drawZone = false; tpreview = null; $('drawz').classList.remove('on'); $('wrap').classList.remove('drawing');
+  $('tunepanel').style.display = 'none'; tuneMode(false); if (msg) { $('info').textContent = msg; $('inforow').style.display = ''; } dirty = true;
+}
+$('tunebtn').onclick = () => { if (!tuneOn) tuneOpen(); }; $('recbtn').onclick = () => { if (tuneOn) tuneClose(); };
+// --- zones: drag a rectangle on the picture (works while zoomed) ---
+const wfrac = e => { const r = $('wrap').getBoundingClientRect(); return [Math.min(1, Math.max(0, ((e.clientX - r.left - panX) / zoom) / r.width)), Math.min(1, Math.max(0, ((e.clientY - r.top - panY) / zoom) / r.height))]; };
+$('drawz').onclick = () => { drawZone = !drawZone; $('drawz').classList.toggle('on', drawZone); $('wrap').classList.toggle('drawing', drawZone); };
+$('wrap').addEventListener('mousedown', e => {
+  if (!drawZone || !tuneOn || e.button !== 0) return; e.preventDefault();
+  const a = wfrac(e); tpreview = [a[0], a[1], a[0], a[1]];
+  const mv = ev => { const b = wfrac(ev); tpreview = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])]; dirty = true; };
+  const up = () => { removeEventListener('mousemove', mv); removeEventListener('mouseup', up); suppressClick = true;
+    if (tpreview && tpreview[2] - tpreview[0] > 0.01 && tpreview[3] - tpreview[1] > 0.01) tzones.push(tpreview); tpreview = null; tuneRecompute(1); };
+  addEventListener('mousemove', mv); addEventListener('mouseup', up);
+});
+$('zclear').onclick = () => { tzones = []; tuneRecompute(1); };
+// --- config files (configs/<camera>.json, the same ones the recorders read) ---
+async function tuneLoadConfig(announce) {
+  const name = $('tname').value; if (!name) return;
+  try { const c = await (await fetch('/api/tuneconfig?name=' + encodeURIComponent(name))).json(); let n = 0;
+    for (const k of Object.keys(TP)) if (c[k] !== undefined) { TP[k] = +c[k]; n++; }
+    if (Array.isArray(c.ignore)) { tzones = c.ignore.map(z => z.split(',').map(Number)).filter(z => z.length === 4 && z.every(isFinite)); n++; }
+    if (n || announce) $('tmsg').textContent = n ? 'betöltve: configs/' + name + '.json' : 'nincs mentett konfig ehhez a névhez';
+    if (vecs) tuneRecompute(1); else tuneUI();
+  } catch (e) { $('tmsg').textContent = 'a konfig nem tölthető be'; }
+}
+$('tload').onclick = () => tuneLoadConfig(true);
+$('tname').addEventListener('input', () => tuneUI());
+$('tsave').onclick = async () => {
+  const name = $('tname').value; if (!name) { $('tmsg').textContent = 'adj meg egy kameranevet'; return; }
+  const body = {...TP, ignore: tzones.map(z => z.map(x => +x.toFixed(4)).join(','))};
+  try { const r = await fetch('/api/tuneconfig?name=' + encodeURIComponent(name), {method: 'POST', body: JSON.stringify(body)}); $('tmsg').textContent = r.ok ? 'mentve: ' + (await r.json()).saved : 'hiba: ' + await r.text(); }
+  catch (e) { $('tmsg').textContent = 'a mentés nem sikerült'; }
+};
+
+$('modebadge').textContent = 'rögzítő · .mvmap';
+
+// ---- frame-size chart (from the .mvvec, format 2): per-frame bytes, rolling median of the previous non-I frames, I frames / outliers clipped ----
+const sz = $('sz'), sctx = sz.getContext('2d'); let szCache = null;
+const SZP = {ratio: 0, scale: 10};
+try { SZP.ratio = +localStorage.getItem('rc_szratio') || 0; SZP.scale = +localStorage.getItem('rc_szscale') || 10; } catch (e) {}
+const SZ_K = 10;     // the scale top is SZ_K x the median; a frame above it is an I frame / outlier (off the scale, not part of the median)
+function szCompute() {
+  const kind = $('szkind').value, win = Math.max(0, +$('szwin').value || 0);
+  if (szCache && szCache.v === vecs && szCache.kind === kind && szCache.win === win) return szCache;
+  const a = kind === 'v' ? vecs.vbytes : vecs.fbytes, N = a.length, med = new Array(N).fill(0), big = new Array(N).fill(false);
+  const medOf = arr => { if (!arr.length) return 0; const c = arr.slice().sort((x, y) => x - y); return c[c.length >> 1]; };
+  // whole-clip reference: the median of all frames is robust against the few I frames; drop what is far above it and take the median again
+  let g = medOf(a); const kept = a.filter(x => x <= SZ_K * g); g = medOf(kept) || g || 1;
+  if (win === 0) { for (let i = 0; i < N; i++) { med[i] = g; big[i] = a[i] > SZ_K * g; } }
+  else { const ring = [];     // rolling median of the previous `win` non-I frames (for long recordings)
+    for (let i = 0; i < N; i++) { const m = ring.length >= 5 ? medOf(ring) : g; med[i] = m; big[i] = a[i] > SZ_K * m;
+      if (!big[i]) { ring.push(a[i]); if (ring.length > win) ring.shift(); } } }
+  return szCache = {v: vecs, kind, win, a, med, big, g};
+}
+function drawSizes() {
+  const show = !!(vecs && vecs.fbytes && vecs.t.length); $('szbox').style.display = show ? '' : 'none'; if (!show) return;
+  fit(sz); const W = sz.width, H = sz.height, dpr = devicePixelRatio || 1; sctx.clearRect(0, 0, W, H);
+  const T = dur(); if (!cur || !T) return; const c = szCompute(), N = vecs.t.length, X = t => t / T * W, yTop = c.g * SZP.scale, Y = b => H - Math.min(1, b / yTop) * (H - 8), sm = tuneOn && tA ? tA.sizeMov : null;
+  for (let i = 0; i < N; i++) { const x0 = Math.round(X(vecs.t[i] / 1000)), x1 = Math.max(x0 + 1, Math.round(X((i + 1 < N ? vecs.t[i + 1] : vecs.t[i] + 40) / 1000))), y = Math.round(Y(c.a[i]));
+    sctx.fillStyle = c.big[i] ? '#c8d4ff' : (sm && sm[i]) ? '#ff6b4d' : '#5b9bd5'; sctx.fillRect(x0, y, x1 - x0, H - y);
+    if (c.big[i] || c.a[i] > yTop) { sctx.fillStyle = '#fff'; sctx.fillRect(x0, y, x1 - x0, Math.min(H - y, 3 * dpr)); } }
+  sctx.strokeStyle = '#ffb000'; sctx.lineWidth = 1.6 * dpr; sctx.beginPath();
+  for (let i = 0; i < N; i++) { const x = X(vecs.t[i] / 1000), y = Y(c.med[i]); i ? sctx.lineTo(x, y) : sctx.moveTo(x, y); } sctx.stroke(); sctx.lineWidth = 1;
+  if (SZP.ratio > 0) { sctx.strokeStyle = '#ffd23f'; sctx.setLineDash([5, 4]); sctx.beginPath(); for (let i = 0; i < N; i++) { const x = X(vecs.t[i] / 1000), y = Y(c.med[i] * SZP.ratio); i ? sctx.lineTo(x, y) : sctx.moveTo(x, y); } sctx.stroke(); sctx.setLineDash([]); }
+  const i0 = Math.min(N - 1, idxIn(vecs.t, vt())), r = c.med[i0] ? c.a[i0] / c.med[i0] : 0;
+  sctx.fillStyle = '#9aa7bd'; sctx.font = `${11 * dpr}px system-ui`;
+  sctx.fillText(`skála: 0–${(yTop / 1024).toFixed(1)} KB (${SZP.scale}× medián) · most: ${(c.a[i0] / 1024).toFixed(1)} KB, medián ${(c.med[i0] / 1024).toFixed(1)} KB, arány ${r.toFixed(2)}×${c.big[i0] ? ' (I/kiugró)' : ''}`, 4, 13 * dpr);
+  sctx.fillStyle = '#fff'; sctx.fillRect(X(v.currentTime), 0, 2, H);
+}
+sz.addEventListener('mousedown', e => { const f = e2 => { const r = sz.getBoundingClientRect(); if (cur) v.currentTime = Math.max(0, Math.min(1, (e2.clientX - r.left) / r.width)) * dur(); };
+  f(e); const up = () => { removeEventListener('mousemove', f); removeEventListener('mouseup', up); }; addEventListener('mousemove', f); addEventListener('mouseup', up); });
+const szUI = () => { $('szratiov').textContent = SZP.ratio > 0 ? SZP.ratio.toFixed(1) + '×' : 'ki'; $('szratio').value = SZP.ratio; $('szscale').value = SZP.scale; };
+szUI();
+['szkind', 'szwin'].forEach(id => $(id).addEventListener('change', () => { if (tuneOn && vecs) tuneRecompute(2); dirty = true; }));
+$('szratio').addEventListener('input', e => { SZP.ratio = +e.target.value; try { localStorage.setItem('rc_szratio', SZP.ratio); } catch (x) {} szUI(); if (tuneOn && vecs) tuneRecompute(2); dirty = true; });
+$('szscale').addEventListener('change', e => { SZP.scale = +e.target.value; try { localStorage.setItem('rc_szscale', SZP.scale); } catch (x) {} dirty = true; });
+let lastKey = '';
+const drawKey = () => v.currentTime.toFixed(3) + '|' + $('showov').checked + $('onlybest').checked + $('ovmode').value;
+function drawAll() {
+  lastKey = drawKey(); dirty = false;
+  // each part on its own: an exception in one drawing function must not stop the loop (the timeline and the picture would freeze)
+  for (const f of [followApply, drawOverlay, drawTimeline, drawSizes]) try { f(); } catch (e) { console.error(f.name, e); }
+}
+function loop() {
+  if (dirty || drawKey() !== lastKey || (!v.paused && $('autozoom').checked)) drawAll();       // (playing with autozoom: the view glides, every display frame)
+  requestAnimationFrame(loop);
+}
+['showov', 'onlybest'].forEach(id => $(id).addEventListener('change', () => dirty = true));
+try { const m = localStorage.getItem('rc_ovmode'); if (m && [...$('ovmode').options].some(o => o.value === m)) $('ovmode').value = m; } catch (e) {}
+$('ovmode').addEventListener('change', () => { try { localStorage.setItem('rc_ovmode', $('ovmode').value); } catch (e) {}
+  if ($('ovmode').value !== 'cells' && cur && cur.has_vec && !vecs && !vecLoading) loadVec(cur); dirty = true; });
+new ResizeObserver(() => applyZoom()).observe($('wrap'));
+loadList().then(loop);
+</script>
+</body>
+</html>

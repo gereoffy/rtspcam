@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="hu"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Élőkép</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+  :root { --bg: #111318; --fg: #e8eaed; --muted: #9aa0a6; --ok: #35c46a; --bad: #ff6b4d; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 13px system-ui, sans-serif; overflow: hidden; }
+  #grid { display: grid; gap: 3px; padding: 3px; height: 100%; box-sizing: border-box; }
+  #grid.single { grid-template-columns: 1fr !important; grid-template-rows: 1fr !important; }
+  #grid.single .tile:not(.big) { display: none; }
+  .tile { position: relative; background: #000; min-height: 0; min-width: 0; cursor: pointer; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; transform-origin: 0 0; }
+  .tile { overflow: hidden; }
+  .tile.zoomed { cursor: grab; } .tile.panning { cursor: grabbing; }
+  .lbl { position: absolute; left: 4px; top: 4px; background: rgba(0,0,0,.55); padding: 2px 6px; border-radius: 4px;
+         font: 12px ui-monospace, monospace; pointer-events: none; display: none; }
+  .tile.nopic .lbl { display: block; }        /* text only on a tile without a picture */
+  .lbl .st { color: var(--muted); } .lbl .bad { color: var(--bad); }
+  /* hover bar: camera name, state and the link to the recordings; only while the mouse is over the tile, the picture itself stays clean */
+  .bar { position: absolute; left: 0; right: 0; top: 0; display: none; align-items: center; gap: 10px; padding: 8px 10px 18px;
+         background: linear-gradient(rgba(0,0,0,.75), rgba(0,0,0,0)); font: 15px ui-monospace, monospace; z-index: 2; }
+  .tile:hover .bar { display: flex; }
+  .tile:hover .lbl { display: none; }          /* the bar says the same */
+  .bar .nm { font-weight: 700; } .bar .st { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cfd3d8; }
+  .bar .st.bad { color: var(--bad); }
+  .bar a { color: #fff; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 5px; padding: 3px 10px; text-decoration: none; white-space: nowrap; }
+  .bar a:hover { border-color: #8ab4f8; color: #8ab4f8; }
+  #err { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); background: rgba(40,10,10,.92); border: 1px solid var(--bad);
+         color: #ffb4a8; padding: 14px 22px; border-radius: 8px; font-size: 16px; text-align: center; display: none; z-index: 5; }
+  .tile.recording { outline: 4px solid #ff9f1a; outline-offset: -4px; }   /* recording after the alarm (post-roll) */
+  .tile.alarm { outline: 4px solid #ff3b30; outline-offset: -4px; }
+</style></head><body>
+<div id="grid"></div>
+<div id="err"></div>
+<script>
+const cams = __CAMS__;
+const grid = document.getElementById('grid');
+const cols = Math.ceil(Math.sqrt(cams.length)), rows = Math.ceil(cams.length / cols);
+grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`; grid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+
+function initEnd(buf) {              // end of the moov box (the init segment) once it is complete, else 0
+  let o = 0;
+  while (o + 8 <= buf.length) {
+    const size = ((buf[o] << 24) >>> 0) + (buf[o+1] << 16) + (buf[o+2] << 8) + buf[o+3];
+    const type = String.fromCharCode(buf[o+4], buf[o+5], buf[o+6], buf[o+7]);
+    if (size < 8 || o + size > buf.length) return 0;
+    o += size;
+    if (type === 'moov') return o;
+  }
+  return 0;
+}
+function codecOf(buf) {               // avc1.PPCCLL from the avcC box of the init segment
+  for (let i = 4; i + 8 < buf.length; i++)
+    if (buf[i] === 0x61 && buf[i+1] === 0x76 && buf[i+2] === 0x63 && buf[i+3] === 0x43)
+      return 'avc1.' + [buf[i+5], buf[i+6], buf[i+7]].map(x => x.toString(16).padStart(2, '0')).join('');
+  return 'avc1.4d0028';
+}
+
+const ZMAX = 12;
+class Tile {
+  constructor(name) {
+    this.name = name;
+    this.el = document.createElement('div'); this.el.className = 'tile';
+    this.v = document.createElement('video'); this.v.muted = true; this.v.autoplay = true; this.v.playsInline = true;
+    this.lbl = document.createElement('div'); this.lbl.className = 'lbl';
+    this.bar = document.createElement('div'); this.bar.className = 'bar';
+    this.bar.innerHTML = '<span class="nm"></span><span class="st"></span><span class="zm"></span><a title="a kamera felvételei a lejátszóban">▶ Felvételek</a>';
+    this.bar.querySelector('.nm').textContent = name; this.barst = this.bar.querySelector('.st'); this.zmEl = this.bar.querySelector('.zm');
+    const a = this.bar.querySelector('a'); a.href = '/player/' + encodeURIComponent(name); a.onclick = e => e.stopPropagation();    // the tile click is the zoom
+    this.el.append(this.v, this.lbl, this.bar); grid.append(this.el);
+    this.z = 1; this.px = 0; this.py = 0; this.noClick = false;
+    this.el.onclick = () => {
+      if (this.noClick) { this.noClick = false; return; }         // the end of a drag
+      if (this.z > 1) { this.z = 1; this.applyZoom(); return; }    // zoomed in: a click goes back to 1x, at 1x it goes back to the grid
+      const big = !this.el.classList.contains('big');
+      document.querySelectorAll('.tile').forEach(t => { t.classList.remove('big'); });
+      tiles.forEach(t => { t.z = 1; t.applyZoom(); });
+      if (big) this.el.classList.add('big'); grid.classList.toggle('single', big); };
+    // zoom (wheel, at the cursor) and pan (drag) of the single large picture, like in the player; a click resets
+    this.el.addEventListener('wheel', e => {
+      if (!this.el.classList.contains('big')) return;
+      e.preventDefault();
+      const r = this.el.getBoundingClientRect(), cx = e.clientX - r.left, cy = e.clientY - r.top;
+      const dy = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1);
+      const nz = Math.min(ZMAX, Math.max(1, this.z * Math.exp(-dy * 0.0015)));
+      if (nz === this.z) return;
+      const k = nz / this.z; this.px = cx - (cx - this.px) * k; this.py = cy - (cy - this.py) * k; this.z = nz;     // the point under the cursor stays
+      this.applyZoom();
+    }, {passive: false});
+    this.el.addEventListener('mousedown', e => {
+      if (this.z <= 1 || e.button !== 0 || e.target.closest('a')) return;
+      const sx = e.clientX, sy = e.clientY, px0 = this.px, py0 = this.py; let moved = false;
+      this.el.classList.add('panning');
+      const mv = ev => { const dx = ev.clientX - sx, dy = ev.clientY - sy; if (!moved && Math.hypot(dx, dy) < 3) return; moved = true; this.px = px0 + dx; this.py = py0 + dy; this.applyZoom(); };
+      const up = () => { removeEventListener('mousemove', mv); removeEventListener('mouseup', up); this.el.classList.remove('panning'); if (moved) this.noClick = true; };
+      addEventListener('mousemove', mv); addEventListener('mouseup', up); e.preventDefault();
+    });
+    this.stuck = 0; this.restarts = 0; this.reconnects = 0; this.connected = false;
+    this.status('kapcsolódás…'); this.start();
+  }
+  applyZoom() {
+    const r = this.el.getBoundingClientRect();
+    this.z = Math.min(ZMAX, Math.max(1, this.z));
+    if (this.z === 1) this.px = this.py = 0;
+    this.px = Math.min(0, Math.max(r.width - r.width * this.z, this.px));          // the picture always covers the tile
+    this.py = Math.min(0, Math.max(r.height - r.height * this.z, this.py));
+    this.v.style.transform = this.z === 1 ? '' : `translate(${this.px}px, ${this.py}px) scale(${this.z})`;
+    this.el.classList.toggle('zoomed', this.z > 1);
+    this.zmEl.textContent = this.z > 1 ? this.z.toFixed(1) + '× · kattintás: vissza' : '';
+  }
+  // problems are written on the (black) tile; while there is a picture everything goes to the tooltip
+  status(s, bad, playing) {
+    this.lbl.innerHTML = `${this.name} <span class="${bad ? 'bad' : 'st'}">${s}</span>`;
+    this.barst.textContent = s; this.barst.classList.toggle('bad', !!bad);
+    this.el.classList.toggle('nopic', !playing);
+  }
+  async start() {
+    this.stop();
+    const ac = this.ac = new AbortController();
+    try {
+      const r = await fetch('/live/' + encodeURIComponent(this.name), {signal: ac.signal, cache: 'no-store'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const rd = r.body.getReader();
+      let head = new Uint8Array(0);
+      while (!this.sb) {                    // the init segment first: it names the codec
+        const {value, done} = await rd.read(); if (done) throw new Error('no data');
+        const n = new Uint8Array(head.length + value.length); n.set(head); n.set(value, head.length); head = n;
+        if (initEnd(head)) await this.open(codecOf(head));
+      }
+      if (this.connected) this.reconnects++;    // a stream started again (recorder restart, network, stall)
+      this.connected = true;
+      this.push(head);
+      for (;;) {
+        const {value, done} = await rd.read();
+        if (done) break;
+        this.push(value);
+      }
+      throw new Error('vége');
+    } catch (e) {
+      if (ac.signal.aborted) return;
+      this.status('újrakapcsolódás… (' + e.message + ')', true);
+      setTimeout(() => this.start(), 2000);
+    }
+  }
+  open(codec) {
+    return new Promise((res, rej) => {
+      const ms = this.ms = new MediaSource();
+      this.v.src = URL.createObjectURL(ms);
+      ms.addEventListener('sourceopen', () => {
+        try {
+          this.sb = ms.addSourceBuffer(`video/mp4; codecs="${codec}"`);
+          this.sb.mode = 'segments';
+          this.q = []; this.sb.addEventListener('updateend', () => this.feed());
+          res();
+        } catch (e) { rej(e); }
+      }, {once: true});
+    });
+  }
+  push(chunk) { this.q.push(chunk); this.feed(); }
+  feed() {
+    const sb = this.sb;
+    if (!sb || sb.updating || !this.q.length) return;
+    const b = this.v.buffered;
+    if (b.length && this.v.currentTime - b.start(0) > 30) {   // keep the buffer small
+      sb.remove(b.start(0), this.v.currentTime - 10); return;
+    }
+    let n = 0; for (const c of this.q) n += c.length;
+    const all = new Uint8Array(n); let o = 0; for (const c of this.q) { all.set(c, o); o += c.length; } this.q = [];
+    try { sb.appendBuffer(all); } catch (e) { this.status('hiba: ' + e.message, true); this.start(); }
+  }
+  stop() {
+    if (this.ac) this.ac.abort();
+    this.sb = null; this.q = []; this.lastq = null;
+    if (this.v.src) { URL.revokeObjectURL(this.v.src); this.v.removeAttribute('src'); this.v.load(); }
+  }
+  tick() {                                  // stay near the live edge
+    const v = this.v, b = v.buffered;
+    if (!this.sb || !b.length) return;
+    const end = b.end(b.length - 1), t = v.currentTime;
+    let inside = false, next = null;
+    for (let i = 0; i < b.length; i++) {
+      if (t >= b.start(i) && t < b.end(i)) inside = true;
+      else if (b.start(i) > t && next === null) next = b.start(i);
+    }
+    if (end - t > 1.5) v.currentTime = Math.max(b.start(0), end - 0.3);
+    else if (!inside && next !== null) v.currentTime = next + 0.01;   // jump over a gap in the buffer
+    if (v.paused) v.play().catch(() => {});
+    const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+    if (!q) return;
+    const now = performance.now();
+    if (this.lastq) {
+      const fps = (q.totalVideoFrames - this.lastq.f) * 1000 / (now - this.lastq.t);
+      this.status(`${v.videoWidth}x${v.videoHeight} · ${fps.toFixed(0)} fps · késés ${(end - v.currentTime).toFixed(1)} s` +
+                  (this.reconnects ? ` · újracsatlakozott ${this.reconnects}×` : '') +
+                  (this.restarts ? ` (ebből akadás miatt ${this.restarts}×)` : ''), false, v.readyState >= 2);
+      // watchdog: data arrives but no picture is shown for 4 s -> start this tile over
+      // (only while the page is visible: hidden pages do not paint on purpose)
+      // (8 s: night cameras send 8-10 fps and the wifi ones come in bursts)
+      if (!document.hidden && q.totalVideoFrames === this.lastq.f && end > this.lastq.end &&
+          Math.abs(v.currentTime - this.lastq.ct) < 0.05) {
+        if (++this.stuck >= 8) { this.stuck = 0; this.restarts++; this.status('akadás, újraindítás…', true); this.start(); return; }
+      } else this.stuck = 0;
+    }
+    this.lastq = {t: now, f: q.totalVideoFrames, end, ct: v.currentTime};
+  }
+}
+const err = document.getElementById('err'), t0 = Date.now();
+if (!cams.length) { err.textContent = 'Hiba: nem fut a rögzítő (nincs élőkép-csatorna)'; err.style.display = 'block'; }
+const tiles = cams.map(c => new Tile(c));
+setInterval(() => tiles.forEach(t => t.tick()), 1000);
+// alarm (red frame) and recording (REC) state of the recorders
+setInterval(async () => {
+  try {
+    const st = await (await fetch('/status', {cache: 'no-store'})).json();
+    for (const t of tiles) {
+      const s = st[t.name] || {};
+      t.el.classList.toggle('alarm', !!s.alarm);
+      t.el.classList.toggle('recording', !!s.rec);
+    }
+    // no recorder has reported for a while and no tile shows a picture: the recorders are not running
+    const none = tiles.length && !tiles.some(t => (st[t.name] || {}).known) && !tiles.some(t => !t.el.classList.contains('nopic'));
+    if (none && Date.now() - t0 > 12000) { err.textContent = 'Hiba: nem fut a rögzítő'; err.style.display = 'block'; }
+    else if (tiles.length) err.style.display = 'none';
+  } catch (e) {}
+}, 1000);
+</script></body></html>
