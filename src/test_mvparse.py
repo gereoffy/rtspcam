@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compare the C motion vector parser (libmvparse) with FFmpeg's export_mvs, frame by frame.
 
-    python c/test_mvparse.py clip.mp4 [clip2.mp4 ...]
+    python src/test_mvparse.py clip.mp4 [clip2.mp4 ...]
 
 The same packets are fed to both: PyAV decodes them with flags2=+export_mvs, the C
 library parses them with mvp_decode(). Every vector (w, h, dst_x, dst_y, motion_x,

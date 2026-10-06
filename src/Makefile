@@ -21,7 +21,7 @@ mvdump: mvdump.o $(OBJS)
 libmvparse.$(SHLIB_EXT): $(OBJS)
 	$(CC) $(CFLAGS) -shared -o $@ $^
 
-# for c/test_session.py
+# for src/test_session.py
 librcsession.$(SHLIB_EXT): test_api.o $(REC_OBJS) $(OBJS) mp4_writer.o h264_sps.o live.o
 	$(CC) $(CFLAGS) -shared -o $@ $^ $(LDLIBS)
 
