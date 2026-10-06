@@ -178,7 +178,7 @@ class Tile {
   }
   stop() {
     if (this.ac) this.ac.abort();
-    this.sb = null; this.q = []; this.lastq = null;
+    this.sb = null; this.q = []; this.lastq = null; this.fq = []; this.picT = -1e9;
     if (this.v.src) { URL.revokeObjectURL(this.v.src); this.v.removeAttribute('src'); this.v.load(); }
   }
   tick() {                                  // stay near the live edge
@@ -196,11 +196,19 @@ class Tile {
     const q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
     if (!q) return;
     const now = performance.now();
+    // frame rate over the last 10 s (a 1 s count jumps around, and is 0 whenever the browser waits a moment at
+    // the live edge for the next picture - wifi cameras deliver in bursts)
+    this.fq.push({t: now, f: q.totalVideoFrames});
+    while (this.fq.length > 2 && now - this.fq[1].t >= 10000) this.fq.shift();
+    // a moment without a decodable picture at the live edge is normal: the tile shows its text (no picture) only
+    // after 3 s of it
+    if (v.readyState >= 2) this.picT = now;
+    const pic = now - this.picT < 3000;
     if (this.lastq) {
-      const fps = (q.totalVideoFrames - this.lastq.f) * 1000 / (now - this.lastq.t);
-      this.status(`${v.videoWidth}x${v.videoHeight} · ${fps.toFixed(0)} fps · késés ${(end - v.currentTime).toFixed(1)} s` +
+      const f0 = this.fq[0], fps = now - f0.t >= 1000 ? (q.totalVideoFrames - f0.f) * 1000 / (now - f0.t) : 0;
+      this.status(`${v.videoWidth}x${v.videoHeight} · ${fps.toFixed(fps < 10 ? 1 : 0)} fps · késés ${(end - v.currentTime).toFixed(1)} s` +
                   (this.reconnects ? ` · újracsatlakozott ${this.reconnects}×` : '') +
-                  (this.restarts ? ` (ebből akadás miatt ${this.restarts}×)` : ''), false, v.readyState >= 2);
+                  (this.restarts ? ` (ebből akadás miatt ${this.restarts}×)` : ''), false, pic);
       // watchdog: data arrives but no picture is shown for 4 s -> start this tile over
       // (only while the page is visible: hidden pages do not paint on purpose)
       // (8 s: night cameras send 8-10 fps and the wifi ones come in bursts)
