@@ -13,6 +13,11 @@ not given stay as they are. The change is made persistent on the camera (ForcePe
 Useful for cameras without a web interface (e.g. Dahua/Imou), whose phone app may reset the
 stream settings: run `set` again (or from cron) after the app has been used. `set` only writes
 when a value differs (a write restarts the camera's encoder), so it is safe to run periodically.
+
+Without --port the usual ONVIF ports are tried: 80 (Dahua, Hikvision), 8899 (cheap Chinese
+"IPCAM / HS-Camera" firmware) and 6688. Some cameras (the HS-Camera ones) reject the WS-Security
+user name token with an HTTP 500 but answer without it: then the requests go unauthenticated
+(said on stderr; --no-auth forces it).
 """
 import argparse
 import base64
@@ -26,12 +31,14 @@ from urllib.parse import unquote, urlsplit
 
 NS = ('xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tt="http://www.onvif.org/ver10/schema" '
       'xmlns:trt="http://www.onvif.org/ver10/media/wsdl" xmlns:tds="http://www.onvif.org/ver10/device/wsdl"')
+PORTS = (80, 8899, 6688)      # tried in this order without --port
 
 
 class Camera:
     def __init__(self, host, port, user, password):
         self.host, self.port, self.user, self.password = host, port, user, password
         self.media = "/onvif/media_service"
+        self.auth = None        # None: not known yet (with the token first, without it if refused)
 
     def _security(self):
         nonce = os.urandom(16)
@@ -46,8 +53,27 @@ class Camera:
                 '</UsernameToken></Security></s:Header>' % (self.user, digest, base64.b64encode(nonce).decode(), created))
 
     def call(self, path, body):
+        if self.auth is not None:
+            return self._call(path, body, self.auth)
+        try:
+            text = self._call(path, body, True)
+            self.auth = True
+            return text
+        except RuntimeError as e:
+            if " 500 " not in str(e):
+                raise
+            try:                # the HS-Camera firmware: HTTP 500 for the token, fine without it
+                text = self._call(path, body, False)
+            except (OSError, RuntimeError):
+                raise e
+            self.auth = False
+            print("note: %s:%d refuses the ONVIF user name token but answers without it: "
+                  "continuing unauthenticated" % (self.host, self.port), file=sys.stderr)
+            return text
+
+    def _call(self, path, body, auth):
         env = '<?xml version="1.0" encoding="utf-8"?><s:Envelope %s>%s<s:Body>%s</s:Body></s:Envelope>' % (
-            NS, self._security(), body)
+            NS, self._security() if auth else "", body)
         data = env.encode()
         s = socket.create_connection((self.host, self.port), timeout=15)
         s.sendall(("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/soap+xml; charset=utf-8\r\n"
@@ -69,7 +95,7 @@ class Camera:
     def find_media(self):
         caps = self.call("/onvif/device_service",
                          '<tds:GetCapabilities><tds:Category>Media</tds:Category></tds:GetCapabilities>')
-        m = re.search(r"<tt:Media>.*?<tt:XAddr>(.*?)</tt:XAddr>", caps, re.S)
+        m = re.search(r"<(?:\w+:)?Media>.*?<(?:\w+:)?XAddr>(.*?)</(?:\w+:)?XAddr>", caps, re.S)
         if m:
             self.media = urlsplit(m.group(1)).path or self.media
 
@@ -125,7 +151,8 @@ def main():
     ap.add_argument("camera", help="rtsp://user:password@host/... or a name from cameras.url")
     ap.add_argument("action", choices=["get", "set"])
     ap.add_argument("--cameras", default=os.path.join(here, "cameras.url"))
-    ap.add_argument("--port", type=int, default=80, help="ONVIF HTTP port")
+    ap.add_argument("--port", type=int, help="ONVIF HTTP port (default: try %s)" % ", ".join(map(str, PORTS)))
+    ap.add_argument("--no-auth", action="store_true", help="send the requests without the user name token")
     ap.add_argument("--token", help="encoder configuration to change (default: the first one)")
     ap.add_argument("--width", type=int)
     ap.add_argument("--height", type=int)
@@ -136,12 +163,22 @@ def main():
     a = ap.parse_args()
 
     cam = camera_from(a.camera, a.cameras)
-    cam.port = a.port
-    try:
-        cam.find_media()
-        confs = cam.configurations()
-    except (OSError, RuntimeError) as e:
-        sys.exit("ONVIF error: %s" % e)
+    if a.no_auth:
+        cam.auth = False
+    errors = []
+    for port in [a.port] if a.port else PORTS:
+        cam.port = port
+        try:
+            cam.find_media()
+            confs = cam.configurations()
+            break
+        except (OSError, RuntimeError) as e:
+            errors.append("port %d: %s" % (port, e))
+            cam.auth = False if a.no_auth else None
+    else:
+        sys.exit("ONVIF error: %s" % "; ".join(errors))
+    if not a.port and cam.port != PORTS[0]:
+        print("note: ONVIF on port %d" % cam.port, file=sys.stderr)
     if not confs:
         sys.exit("the camera reported no video encoder configuration")
     if a.action == "get":
