@@ -1,6 +1,9 @@
 # local test data and camera configs (not for the repository)
 configs/
 tune_clips/
+# recordings and the live view sockets (start_live.sh: OUT=rec, LIVE=rclive)
+rec/
+rclive/
 # build output
 src/*.o
 src/rtspcam
