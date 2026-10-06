@@ -8,6 +8,7 @@
  * are read straight from the H.264 entropy layer (mvparse) and drive the same state
  * machine as rtspcam.py (pre-roll, post-roll, hysteresis, .mvmap sidecar). */
 #include <dirent.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@
 #include "mp4_reader.h"
 #include "mp4_writer.h"
 #include "options.h"
+#include "rtp_aac.h"
 #include "rtp_h264.h"
 #include "rtsp.h"
 #include "session.h"
@@ -171,13 +173,66 @@ end:
 
 typedef struct run_ctx {
     rc_session *s;
-    long rtp, aus, keys, broken;
+    long rtp, aus, keys, broken, audio_frames;
     int64_t ts_first, ts_last;
+    /* audio/video alignment: the RTP clocks of the two streams have unrelated origins (and
+     * the cameras send no RTCP sender reports to relate them), so both are tied to the arrival
+     * time: off = min(arrival - rtp time), the least delayed packet of each stream */
+    double vclock, aclock;
+    double off_v, off_a;
+    int have_off_v, have_off_a;
+    int64_t anext;                  /* where the next AAC frame continues the previous one */
+    int have_anext;
+    double aerr;                    /* mean of (camera's time - continued time) */
+    long aresync, asnapped;
 } run_ctx;
+
+#define AAC_FRAME 1024              /* samples per AAC-LC frame */
+
+static int on_aac(void *opaque, const uint8_t *frame, int size, int64_t ts)
+{
+    run_ctx *r = opaque;
+    double o = mono() - (double)ts / r->aclock;
+    int64_t t;
+    if (!r->have_off_a || o < r->off_a) {
+        r->off_a = o;
+        r->have_off_a = 1;
+    }
+    r->audio_frames++;
+    if (!r->have_off_v)
+        return 0;                       /* no picture yet: nothing to align with */
+    t = ts + llround((r->off_a - r->off_v) * r->aclock);
+    /* Every AAC frame holds exactly 1024 samples, but cameras stamp them with a jitter (the
+     * Imou: +-20 ms). Stamped as they come, the frames would overlap or leave gaps in the
+     * file (clicks): they are laid end to end instead. The camera's time is followed again
+     * (a jump in the file) only when it departs from the continued time by much more than
+     * the jitter: lost audio (a whole frame), a clock jump, or a drift of over a frame. The
+     * continued time keeps the offset of the frame it started from (within the jitter). */
+    if (r->have_anext) {
+        double err = (double)(t - r->anext);
+        if (fabs(err - r->aerr) <= AAC_FRAME * 5 / 8 && fabs(r->aerr) < AAC_FRAME) {
+            r->asnapped++;
+            r->aerr += (err - r->aerr) / (r->asnapped < 16 ? r->asnapped : 16);
+            t = r->anext;
+        } else {
+            r->aresync++;
+            r->aerr = 0;
+            r->asnapped = 0;
+        }
+    }
+    r->anext = t + AAC_FRAME;
+    r->have_anext = 1;
+    return rcs_audio(r->s, frame, size, t);
+}
 
 static int on_au(void *opaque, const uint8_t *au, int size, int64_t ts, int key, int broken)
 {
     run_ctx *r = opaque;
+    double o = mono() - (double)ts / r->vclock;
+    if (!r->have_off_v || o < r->off_v) {
+        r->off_v = o;
+        r->have_off_v = 1;
+    }
     if (r->aus == 0)
         r->ts_first = ts;
     r->ts_last = ts;
@@ -212,6 +267,8 @@ static void run_session(const rc_opts *a, const mp4_options *mo)
 {
     rtsp_client *c;
     rtp_h264 *dp = NULL;
+    rtp_aac *ap = NULL;
+    const rtsp_audio_info *ai;
     run_ctx r = { 0 };
     const uint8_t *sprop;
     int sprop_len;
@@ -222,7 +279,7 @@ static void run_session(const rc_opts *a, const mp4_options *mo)
         rtsp_redact(a->url, shown, sizeof(shown));
         log_info("connecting to %s", shown);
     }
-    c = rtsp_open(a->url, a->timeout, &stop_requested);
+    c = rtsp_open(a->url, a->timeout, a->audio && !a->viewonly, &stop_requested);
     if (!c)
         return;
     r.s = rcs_create(a, 0, &mp4_writer_ops, (void *)mo);     /* --viewonly: the session writes nothing */
@@ -234,14 +291,33 @@ static void run_session(const rc_opts *a, const mp4_options *mo)
     if (!sprop_len)
         log_info("no sprop-parameter-sets in the SDP: waiting for in-band SPS/PPS");
     rcs_set_stream(r.s, sprop, sprop_len, 1, rtsp_clock_rate(c), 0);
+    r.vclock = rtsp_clock_rate(c);
     dp = rtp_h264_create(rtsp_payload_type(c), on_au, &r);
     if (!dp)
         goto end;
+    ai = rtsp_audio(c);
+    if (ai) {
+        r.aclock = ai->clock_rate;
+        ap = rtp_aac_create(ai->size_length, ai->index_length, ai->index_delta_length, 1024, on_aac, &r);
+        if (!ap || rcs_set_audio(r.s, ai->clock_rate, ai->channels, ai->config, ai->config_len) < 0) {
+            log_warn("cannot set up the audio: recording without it");
+            rtp_aac_free(ap);
+            ap = NULL;
+        }
+    }
     for (;;) {
         const uint8_t *pkt;
-        int n = rtsp_read_rtp(c, &pkt, &stop_requested);
+        int is_audio;
+        int n = rtsp_read_rtp(c, &pkt, &is_audio, &stop_requested);
         if (n <= 0)
             break;
+        if (is_audio) {
+            if (ap && rtp_aac_push(ap, pkt, n) < 0) {
+                log_error("processing error (audio)");
+                break;
+            }
+            continue;
+        }
         r.rtp++;
         if (live)
             live_poll(live);            /* keep the viewers' data flowing between pictures */
@@ -255,7 +331,11 @@ end:
         log_info("session: %ld RTP packets (%ld sequence gaps), %ld pictures (%ld key, %ld incomplete), "
                  "stream time %.1f s in %.1f s", r.rtp, rtp_h264_seq_gaps(dp), r.aus, r.keys, r.broken,
                  r.aus ? (double)(r.ts_last - r.ts_first) / rtsp_clock_rate(c) : 0.0, mono() - t_start);
+    if (ap)
+        log_info("session: %ld audio frames, %ld resyncs (audio %+.0f ms against the video by arrival time)",
+                 r.audio_frames, r.aresync, r.have_off_a && r.have_off_v ? (r.off_a - r.off_v) * 1000 : 0.0);
     rtp_h264_free(dp);
+    rtp_aac_free(ap);
     rcs_free(r.s);                      /* closes an open recording */
     rtsp_close(c);
 }

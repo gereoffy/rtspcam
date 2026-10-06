@@ -4,7 +4,7 @@ SHLIB_EXT := $(if $(filter Darwin,$(shell uname -s)),dylib,so)
 
 OBJS = mvparse.o h264_cabac_tables.o
 REC_OBJS = options.o motion.o mvmap_writer.o session.o log.o
-CAM_OBJS = main.o rtsp.o md5.o mp4_reader.o live.o rtp_h264.o mp4_writer.o h264_sps.o
+CAM_OBJS = main.o rtsp.o md5.o mp4_reader.o live.o rtp_h264.o rtp_aac.o mp4_writer.o h264_sps.o
 LDLIBS = -lz -lm
 
 all: rtspcam mvdump libmvparse.$(SHLIB_EXT) librcsession.$(SHLIB_EXT)

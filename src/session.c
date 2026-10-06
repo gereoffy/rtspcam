@@ -30,6 +30,17 @@ typedef struct buf_pkt {
     int vcl_bytes;
 } buf_pkt;
 
+/* an audio frame waiting in the pre-roll buffer */
+typedef struct buf_audio {
+    uint8_t *data;
+    int size;
+    int64_t ts;             /* 1/audio_rate s, on the video's time line */
+    double t;               /* the same in seconds */
+} buf_audio;
+
+#define AUDIO_KEEP_S 10.0       /* audio kept while no picture is buffered */
+#define AUDIO_AHEAD_S 5.0       /* audio further ahead of the last picture is not recorded */
+
 typedef struct segment {
     char *path;
     void *video;
@@ -64,6 +75,9 @@ struct rc_session {
 
     buf_pkt *buf;
     int buf_n, buf_cap;
+    uint8_t *audio_config;  /* si.audio_config (owned) */
+    buf_audio *abuf;        /* audio of the buffered pictures (not recording) */
+    int abuf_n, abuf_cap;
     segment *writer;
     char *map_path;         /* file analysis: fixed .mvmap path */
 
@@ -152,7 +166,7 @@ static int null_close(void *h)
     return 0;
 }
 
-const rc_video_ops rcs_null_ops = { null_open, null_write, null_close };
+const rc_video_ops rcs_null_ops = { null_open, null_write, null_close, NULL };
 #define null_ops rcs_null_ops
 
 /* Disk full, unwritable directory, write error: from now on the session behaves as with
@@ -492,6 +506,100 @@ static int buf_append(rc_session *s, const rc_packet *p, const mt_record *rec, c
     return 0;
 }
 
+/* drops the buffered audio older than t */
+static void abuf_drop_before(rc_session *s, double t)
+{
+    int i, n;
+    for (n = 0; n < s->abuf_n && s->abuf[n].t < t; n++)
+        free(s->abuf[n].data);
+    if (!n)
+        return;
+    for (i = n; i < s->abuf_n; i++)
+        s->abuf[i - n] = s->abuf[i];
+    s->abuf_n -= n;
+}
+
+/* the buffered audio follows the buffered pictures: it starts with the first of them (or
+ * covers the last few seconds while there is none) */
+static void abuf_trim(rc_session *s, double now_t)
+{
+    abuf_drop_before(s, s->buf_n ? s->buf[0].p.ts : now_t - AUDIO_KEEP_S);
+}
+
+static int abuf_append(rc_session *s, const uint8_t *data, int size, int64_t ts, double t)
+{
+    buf_audio *b;
+    if (s->abuf_n == s->abuf_cap) {
+        int cap = s->abuf_cap ? s->abuf_cap * 2 : 256;
+        buf_audio *nb = realloc(s->abuf, sizeof(*nb) * cap);
+        if (!nb)
+            return -1;
+        s->abuf = nb;
+        s->abuf_cap = cap;
+    }
+    b = &s->abuf[s->abuf_n];
+    b->data = malloc(size);
+    if (!b->data)
+        return -1;
+    memcpy(b->data, data, size);
+    b->size = size;
+    b->ts = ts;
+    b->t = t;
+    s->abuf_n++;
+    return 0;
+}
+
+static int segment_write_audio(rc_session *s, segment *g, const uint8_t *data, int size, int64_t ts)
+{
+    const rc_video_ops *ops = s->viewonly ? &null_ops : s->ops;
+    if (!ops->write_audio)
+        return 0;
+    if (ops->write_audio(g->video, data, size, ts) < 0) {
+        g->failed = 1;          /* the writer has logged it; the next picture closes the recording */
+        return -1;
+    }
+    return 0;
+}
+
+int rcs_set_audio(rc_session *s, int rate, int channels, const uint8_t *config, int config_size)
+{
+    free(s->audio_config);
+    s->audio_config = NULL;
+    s->si.audio_rate = 0;
+    s->si.audio_config = NULL;
+    s->si.audio_config_size = 0;
+    if (rate <= 0 || !config || config_size <= 0)
+        return 0;
+    s->audio_config = malloc(config_size);
+    if (!s->audio_config)
+        return -1;
+    memcpy(s->audio_config, config, config_size);
+    s->si.audio_rate = rate;
+    s->si.audio_channels = channels > 0 ? channels : 1;
+    s->si.audio_config = s->audio_config;
+    s->si.audio_config_size = config_size;
+    return 0;
+}
+
+int rcs_audio(rc_session *s, const uint8_t *data, int size, int64_t ts)
+{
+    double t;
+    if (!s->si.audio_rate || size <= 0 || !s->synced)
+        return 0;
+    t = (double)ts / s->si.audio_rate;
+    if (s->writer) {
+        /* not while the video has stopped (the file follows the pictures); generous, as wifi
+         * cameras deliver the video in bursts */
+        if (t <= s->last_ts + AUDIO_AHEAD_S)
+            segment_write_audio(s, s->writer, data, size, ts);
+        return 0;
+    }
+    if (abuf_append(s, data, size, ts, t) < 0)
+        return -1;
+    abuf_trim(s, t);
+    return 0;
+}
+
 static void start(rc_session *s, double ts)
 {
     double first_ts = s->buf[0].p.ts;
@@ -501,7 +609,7 @@ static void start(rc_session *s, double ts)
     double wall = s->fixed_wall ? s->wall0 + first_ts - s->ts0 : now() - (ts - first_ts);
     char *path;
     segment *g;
-    int i;
+    int i, j;
 
     /* A file must begin with a key frame. After a cut at a non-key frame (--max-tail, a write
      * error) the buffer may begin mid-GOP: those pictures are dropped; if no key frame is
@@ -537,10 +645,18 @@ static void start(rc_session *s, double ts)
         free(path);
         return;                 /* the buffer is kept (trimmed to the pre-roll); the next packet retries */
     }
-    for (i = 0; i < s->buf_n; i++)
+    /* the buffered pictures, with the buffered audio in time order between them (the audio
+     * from before the first picture is dropped: the file starts with that key frame) */
+    abuf_drop_before(s, first_ts);
+    for (i = 0, j = 0; i < s->buf_n; i++) {
+        double next = i + 1 < s->buf_n ? s->buf[i + 1].p.ts : 1e300;
         segment_write(s, g, &s->buf[i].p, s->buf[i].has_rec ? &s->buf[i].rec : NULL, s->buf[i].vec,
                       s->buf[i].vec_n, s->buf[i].vcl_bytes);
+        for (; j < s->abuf_n && s->abuf[j].t < next; j++)
+            segment_write_audio(s, g, s->abuf[j].data, s->abuf[j].size, s->abuf[j].ts);
+    }
     buf_drop_front(s, s->buf_n);
+    abuf_drop_before(s, 1e300);
     s->writer = g;
     s->seg_start_ts = first_ts;
     if (s->viewonly)
@@ -593,6 +709,7 @@ static void trim_buffer(rc_session *s, double ts)
             break;
         buf_drop_front(s, k1);
     }
+    abuf_trim(s, ts);
 }
 
 /* --vectors: longest vector per cell of an analysed picture (session-owned buffer) */
@@ -785,6 +902,9 @@ void rcs_free(rc_session *s)
     for (i = 0; i < s->buf_n; i++)
         buf_free_pkt(&s->buf[i]);
     free(s->buf);
+    abuf_drop_before(s, 1e300);
+    free(s->abuf);
+    free(s->audio_config);
     mt_free(&s->det);
     mvp_free(s->mvp);
     free(s->extradata);

@@ -35,7 +35,7 @@ static int log_close(void *h)
     return fclose((FILE *)h);
 }
 
-static const rc_video_ops log_ops = { log_open, log_write, log_close };
+static const rc_video_ops log_ops = { log_open, log_write, log_close, NULL };
 
 test_session *rct_create(int argc, char **argv, double wall0)
 {

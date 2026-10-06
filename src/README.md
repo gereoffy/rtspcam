@@ -69,6 +69,14 @@ A kapcsolók ugyanazok, mint az `rtspcam.py`-nál (`--config` JSON is megy), kiv
 - új: `--viewonly`: nem ír fájlt (se `.mp4`, se `.mvmap`/`.mvvec`, könyvtárat sem hoz létre), minden más ugyanúgy megy:
   elemzés, riasztás, a felvétel indítása/leállítása „elvben” (a naplóban `EVENT start/stop`), és a `--live` élőkép a
   piros/narancs kerettel. Olyan kamerákhoz, amelyeknek csak az élőképe kell (pl. forgalmas utca).
+- új: `--audio`: a kamera hangját is rögzíti az MP4-be (második sáv), az élőképbe soha nem kerül. Csak AAC
+  (RTSP-n `mpeg4-generic`, pl. Dahua/Imou) megy át átkódolás nélkül; G.711-nél (PCMA/PCMU) és más formátumnál a
+  naplóba ír egy figyelmeztetést, és hang nélkül rögzít. A hang és a kép RTP-órája között nincs kapcsolat (a
+  kamerák RTCP sender reportot sem küldenek), ezért a beérkezési idő szerint illeszti őket (a legkevésbé késett
+  csomag alapján), lazán: néhányszor 10 ms pontosság helyi hálózaton, wifin rosszabb is lehet. A kamerák a hangkeretek
+  időbélyegét zajosan adják (Imou: ±20 ms), az AAC-keretek viszont pontosan 1024 mintásak: a fájlban folytonosan,
+  egymás után következnek (különben pattogna), és csak valódi kiesésnél (fél keretnél nagyobb eltérés) igazodik újra
+  a kamera idejéhez. A pre-roll a hangot is tartalmazza. Mért: Imou 16 kHz mono AAC, ~32 kbit/s.
 - új: `--skip-after-key N` (alapértelmezett 0): a kulcskocka utáni első N képet nem elemzi (16-os jelző, nincs
   `.mvvec`-rács). Alacsony bitrátájú kameráknál (Kinai-Mini) a kódoló a kulcskocka után „átfesti” a képet, és az első
   P-kocka szinte mindig mozgást mutat (mért: 69% vs. 0–4%), ami felvétel közben 2 s-onként meghosszabbította a post-rollt.
@@ -110,7 +118,9 @@ küldenek, a YGTek ilyenkor a nagy IDR-képek tartalmát a kamerában elrontja �
 - `session.c/.h` – a `run_session()` állapotgépe (pre-roll puffer, post-roll, `--max-segment`, `--max-tail`);
   a videóíró cserélhető (`rc_video_ops`: MP4 író, a tesztben csomagnaplózó).
 - `log.c/.h` – naplózás az `rtspcam.py` formátumában.
-- `rtsp.c/.h` – RTSP-kliens (OPTIONS, DESCRIBE, SETUP, PLAY, GET_PARAMETER keepalive, TEARDOWN), SDP, sprop-parameter-sets.
+- `rtsp.c/.h` – RTSP-kliens (OPTIONS, DESCRIBE, SETUP, PLAY, GET_PARAMETER keepalive, TEARDOWN), SDP, sprop-parameter-sets;
+  `--audio`-val az első AAC hangsávot is felveszi (második SETUP, `interleaved=2-3`).
+- `rtp_aac.c/.h` – RTP → AAC keretek (RFC 3640, AU-fejlécek; több csomagra tördelt keret összerakása).
 - `rtp_h264.c/.h` – RTP → Annex B képkockák (single NAL, STAP-A, FU-A). Képhatár az időbélyeg váltásánál vagy markernél
   (az Intellio kamera nem mindig állítja a marker bitet, a YGTek minden csomagra ráteszi); a kép típusát a start code-ok
   alapján nézi (egyes kínai kamerák a teljes képet start code-okkal egy FU-A-ba teszik); a kép nélküli SPS/PPS/SEI a
@@ -119,7 +129,8 @@ küldenek, a YGTek ilyenkor a nagy IDR-képek tartalmát a kamerában elrontja �
 - `md5.c/.h` – MD5 a Digest hitelesítéshez.
 - `mp4_writer.c/.h` – fragmentált MP4 (`ftyp`, üres `moov`, GOP-onként `moof`+`mdat`, a végén `mfra`), mint az ffmpeg
   `frag_keyframe+empty_moov+default_base_moof`; `.part`-ként íródik, lezáráskor átnevezi. `h264_sps.c`: az SPS-javítás
-  (`max_num_ref_frames` → 4, mint a `h264fix.py`), az avcC-ben és a kulcskockák SPS-ében.
+  (`max_num_ref_frames` → 4, mint a `h264fix.py`), az avcC-ben és a kulcskockák SPS-ében. Hanggal (`--audio`) egy
+  második sáv (`mp4a`/`esds`), a hangkeretek ugyanabban a fragmensben, saját `traf`-ban; az élő módban soha.
 - `mp4_reader.c/.h` – MP4/MOV index-olvasó (első H.264 videósáv; moov táblák és moof/trun fragmentek) a fájlmódhoz.
 - `live.c/.h` – élőkép-socket (nem blokkoló, kliensenkénti sor, utolsó GOP a gyors induláshoz); az `mp4_writer.c` élő
   módja (`mp4_live_*`) készíti a kockánkénti fragmenseket.

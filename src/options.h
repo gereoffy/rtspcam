@@ -34,6 +34,7 @@ typedef struct rc_opts {
     int fix;                /* FIX_* */
     int map;
     int vectors;            /* also write the .mvvec motion field sidecar */
+    int audio;              /* also record the camera's AAC audio (not in the live view) */
     char *live;             /* directory of the live stream socket <live>/<name>.sock, or NULL */
     int cheap;              /* accepted for compatibility, nothing to skip here */
     int debug;

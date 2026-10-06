@@ -23,6 +23,11 @@ typedef struct rc_stream_info {
     int tb_num, tb_den;
     int nal_length_size;        /* 0 = Annex B packets */
     int width, height;          /* from the SPS, 0 if unknown */
+    /* audio (AAC) to be recorded too; audio_rate 0: none */
+    int audio_rate;             /* sample rate = time base of the audio timestamps */
+    int audio_channels;
+    const uint8_t *audio_config;    /* AudioSpecificConfig */
+    int audio_config_size;
 } rc_stream_info;
 
 typedef struct rc_video_ops {
@@ -30,6 +35,9 @@ typedef struct rc_video_ops {
     void *(*open)(void *opaque, const char *path, const rc_stream_info *si);
     int (*write)(void *h, const rc_packet *p);
     int (*close)(void *h);
+    /* one raw AAC frame; ts in 1/audio_rate s on the video's time line (ts / audio_rate is
+     * comparable with the video dts in seconds). NULL: audio is not stored. */
+    int (*write_audio)(void *h, const uint8_t *data, int size, int64_t ts);
 } rc_video_ops;
 
 typedef struct rc_session rc_session;
@@ -47,6 +55,11 @@ int rcs_set_stream(rc_session *s, const uint8_t *extradata, int size, int tb_num
 /* one access unit; data must stay valid only during the call. broken: the picture is incomplete
  * (lost packets): it is stored but not analysed (its vectors would be garbage). */
 int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_t pts, int key, int broken);
+/* Audio to be recorded with the video (not analysed, not sent to the live view). rate: sample
+ * rate; config: AudioSpecificConfig. Call before the first packet. */
+int rcs_set_audio(rc_session *s, int rate, int channels, const uint8_t *config, int config_size);
+/* one raw AAC frame; ts in 1/rate s on the video's time line (see rc_video_ops.write_audio) */
+int rcs_audio(rc_session *s, const uint8_t *data, int size, int64_t ts);
 /* File analysis: write the whole stream as one .mvmap to `path` (no file names from the clock)
  * and analyse from the first packet on (no waiting for a key frame), so the map times are
  * the file's times. Use with --always and an infinite --max-segment. */

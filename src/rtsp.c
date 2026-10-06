@@ -1,5 +1,6 @@
 /* Minimal RTSP/1.0 client (RFC 2326): TCP only, RTP interleaved on the control
- * connection, first H.264 video stream of the SDP, no authentication. */
+ * connection, first H.264 video stream of the SDP and, if asked for, its first AAC audio
+ * stream; Basic/Digest authentication. */
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -47,6 +48,14 @@ struct rtsp_client {
     int rtp_channel;
     uint8_t *sprop;
     int sprop_len;
+
+    /* the first audio stream of the SDP */
+    int audio_pt;           /* -1: none */
+    char audio_enc[32];     /* encoding name from a=rtpmap */
+    char *audio_control;
+    rtsp_audio_info ai;     /* filled for AAC (mpeg4-generic) */
+    int audio_aac;
+    int audio_channel;      /* interleaved channel of its RTP, -1: not set up */
 
     uint8_t *rbuf;
     size_t rpos, rlen;      /* unread data is rbuf[rpos .. rlen) */
@@ -592,28 +601,92 @@ static char *dup_value(const char *s)
     return d;
 }
 
+/* "key=value" parameter of an a=fmtp line (keys are case-insensitive); copies the value */
+static int fmtp_param(const char *line, const char *eol, const char *key, char *val, size_t vlen)
+{
+    size_t kl = strlen(key);
+    const char *p = strchr(line, ' ');
+    while (p && (!eol || p < eol)) {
+        p += strspn(p, " ;");
+        if (!strncasecmp(p, key, kl) && p[kl] == '=') {
+            size_t n = strcspn(p + kl + 1, "; \r\n");
+            if (n >= vlen)
+                n = vlen - 1;
+            memcpy(val, p + kl + 1, n);
+            val[n] = 0;
+            return 1;
+        }
+        p = strchr(p, ';');
+    }
+    return 0;
+}
+
+/* a=fmtp of an mpeg4-generic (AAC) stream: AU header layout and AudioSpecificConfig */
+static void parse_aac_fmtp(rtsp_client *c, const char *line, const char *eol)
+{
+    char v[256];
+    size_t i;
+    if (fmtp_param(line, eol, "sizelength", v, sizeof(v)))
+        c->ai.size_length = atoi(v);
+    if (fmtp_param(line, eol, "indexlength", v, sizeof(v)))
+        c->ai.index_length = atoi(v);
+    if (fmtp_param(line, eol, "indexdeltalength", v, sizeof(v)))
+        c->ai.index_delta_length = atoi(v);
+    if (fmtp_param(line, eol, "config", v, sizeof(v))) {
+        c->ai.config_len = 0;
+        for (i = 0; v[i] && v[i + 1] && c->ai.config_len < (int)sizeof(c->ai.config); i += 2) {
+            unsigned b;
+            if (sscanf(v + i, "%2x", &b) != 1)
+                break;
+            c->ai.config[c->ai.config_len++] = (uint8_t)b;
+        }
+    }
+}
+
 static int parse_sdp(rtsp_client *c, const char *sdp)
 {
     const char *line = sdp;
-    int in_video = 0, found = 0, video_pt = -1;
+    int in_video = 0, in_audio = 0, in_media = 0, found = 0, video_pt = -1;
 
+    c->audio_pt = -1;
     while (line && *line) {
         const char *eol = strchr(line, '\n');
         if (!strncmp(line, "m=", 2)) {
-            in_video = 0;
+            int port, pt;
+            char proto[32];
+            in_video = in_audio = 0;
+            in_media = 1;
             if (!found && !strncmp(line, "m=video ", 8)) {
-                int port, pt;
-                char proto[32];
                 if (sscanf(line, "m=video %d %31s %d", &port, proto, &pt) == 3) {
                     in_video = 1;
                     found = 1;
                     video_pt = pt;
                 }
+            } else if (c->audio_pt < 0 && !strncmp(line, "m=audio ", 8)) {
+                if (sscanf(line, "m=audio %d %31s %d", &port, proto, &pt) == 3) {
+                    in_audio = 1;
+                    c->audio_pt = pt;
+                }
             }
         } else if (!strncmp(line, "a=control:", 10)) {
-            char **dst = in_video ? &c->video_control : (found ? NULL : &c->session_control);
+            char **dst = in_video ? &c->video_control : in_audio ? &c->audio_control :
+                         in_media ? NULL : &c->session_control;
             if (dst && !*dst)
                 *dst = dup_value(line + 10);
+        } else if (in_audio && !strncmp(line, "a=rtpmap:", 9)) {
+            int pt, rate, ch = 1;
+            char enc[32];
+            int n = sscanf(line + 9, "%d %31[^/]/%d/%d", &pt, enc, &rate, &ch);
+            if (n >= 3 && pt == c->audio_pt) {
+                snprintf(c->audio_enc, sizeof(c->audio_enc), "%s", enc);
+                c->ai.clock_rate = rate;
+                c->ai.channels = n == 4 ? ch : 1;
+                c->audio_aac = !strcasecmp(enc, "MPEG4-GENERIC");
+            }
+        } else if (in_audio && !strncmp(line, "a=fmtp:", 7)) {
+            int pt;
+            if (sscanf(line + 7, "%d", &pt) == 1 && pt == c->audio_pt)
+                parse_aac_fmtp(c, line, eol);
         } else if (in_video && !strncmp(line, "a=rtpmap:", 9)) {
             int pt, rate;
             char enc[32];
@@ -716,7 +789,7 @@ static void keepalive(rtsp_client *c)
         log_warn("keepalive failed");
 }
 
-rtsp_client *rtsp_open(const char *url, double timeout, volatile int *stop)
+rtsp_client *rtsp_open(const char *url, double timeout, int want_audio, volatile int *stop)
 {
     rtsp_client *c;
     response r;
@@ -822,6 +895,33 @@ rtsp_client *rtsp_open(const char *url, double timeout, volatile int *stop)
     }
     free_response(&r);
 
+    c->audio_channel = -1;
+    if (want_audio && c->audio_pt < 0) {
+        log_info("the camera sends no audio (no audio stream in the SDP)");
+    } else if (want_audio && !c->audio_aac) {
+        log_warn("the audio is %s: not recorded (only AAC can be stored in the MP4 without transcoding)",
+                 c->audio_enc[0] ? c->audio_enc : "of an unknown format");
+    } else if (want_audio && (c->ai.size_length <= 0 || c->ai.config_len < 2 || c->ai.clock_rate <= 0)) {
+        log_warn("the AAC audio stream is not described fully in the SDP (sizelength/config): not recorded");
+    } else if (want_audio) {
+        char tr[96];
+        int ch = c->rtp_channel + 2;
+        free(setup_url);
+        setup_url = resolve(c->base, c->audio_control);
+        snprintf(tr, sizeof(tr), "Transport: RTP/AVP/TCP;unicast;interleaved=%d-%d\r\n", ch, ch + 1);
+        if (setup_url && request(c, "SETUP", setup_url, tr, &r) == 0) {
+            c->audio_channel = ch;
+            if (header(&r, "Transport", val, sizeof(val))) {
+                const char *il = strstr(val, "interleaved=");
+                if (il)
+                    c->audio_channel = atoi(il + 12);
+            }
+            free_response(&r);
+        } else {
+            log_warn("the camera refused the audio stream: recording without audio");
+        }
+    }
+
     play_url = resolve(c->base, c->session_control);
     if (!play_url || request(c, "PLAY", play_url, "Range: npt=0.000-\r\n", &r) < 0)
         goto fail;
@@ -831,6 +931,8 @@ rtsp_client *rtsp_open(const char *url, double timeout, volatile int *stop)
     free(play_url);
     log_info("connected: %s (payload %d, %d Hz, session timeout %d s)", c->url, c->payload_type,
              c->clock_rate, c->session_timeout);
+    if (c->audio_channel >= 0)
+        log_info("audio: AAC %d Hz, %d channel(s)", c->ai.clock_rate, c->ai.channels);
     return c;
 fail:
     free(setup_url);
@@ -855,8 +957,14 @@ int rtsp_payload_type(const rtsp_client *c)
     return c->payload_type;
 }
 
-int rtsp_read_rtp(rtsp_client *c, const uint8_t **pkt, volatile int *stop)
+const rtsp_audio_info *rtsp_audio(const rtsp_client *c)
 {
+    return c->audio_channel >= 0 ? &c->ai : NULL;
+}
+
+int rtsp_read_rtp(rtsp_client *c, const uint8_t **pkt, int *audio, volatile int *stop)
+{
+    *audio = 0;
     for (;;) {
         int r;
         if (mono() - c->last_video > c->timeout) {
@@ -880,6 +988,11 @@ int rtsp_read_rtp(rtsp_client *c, const uint8_t **pkt, volatile int *stop)
             if (ch == c->rtp_channel && n >= 12) {
                 c->last_video = mono();
                 *pkt = c->rbuf + c->rpos - n;
+                return (int)n;
+            }
+            if (ch == c->audio_channel && n >= 12) {
+                *pkt = c->rbuf + c->rpos - n;
+                *audio = 1;
                 return (int)n;
             }
             continue;                           /* RTCP or another channel */
@@ -947,6 +1060,7 @@ void rtsp_close(rtsp_client *c)
     free(c->base);
     free(c->session);
     free(c->video_control);
+    free(c->audio_control);
     free(c->session_control);
     free(c->sprop);
     free(c->rbuf);

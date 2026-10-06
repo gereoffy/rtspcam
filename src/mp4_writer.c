@@ -6,7 +6,12 @@
  *
  * Input packets are Annex B or length-prefixed access units; samples are stored with
  * 4-byte NAL lengths. With fix_refs > 0 every SPS (in avcC and in-band) gets
- * max_num_ref_frames = fix_refs (see h264_sps.c). Timestamps start at 0. */
+ * max_num_ref_frames = fix_refs (see h264_sps.c). Timestamps start at 0.
+ *
+ * Optional audio (si->audio_rate > 0): raw AAC frames as a second track (mp4a/esds), in
+ * the same fragments as the video (a second traf; its data follows the video's in the mdat),
+ * on the same time line (0 = the first picture). Never in live mode. */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +26,11 @@ typedef struct sample {
     int64_t dts;
     int key;
 } sample;
+
+typedef struct asample {
+    size_t off, size;       /* in the fragment's audio data buffer */
+    int64_t dts;            /* 1/audio_rate s */
+} asample;
 
 typedef struct frag_index {
     int64_t time;
@@ -48,6 +58,17 @@ typedef struct mp4w {
     frag_index *idx;
     int n_idx, cap_idx;
     int failed;
+
+    /* audio track (a_rate 0: none) */
+    int a_rate, a_channels;
+    uint8_t a_cfg[64];
+    int a_cfg_len;
+    int64_t a_base;         /* the first picture's time in 1/a_rate s */
+    bytebuf amdat;
+    asample *asmp;
+    int n_asmp, cap_asmp;
+    int64_t a_last_dts, a_last_duration;
+    int have_a_last;
 
     /* live mode (mp4_live_*): no file; the init segment and one fragment per picture go to memory */
     int live;
@@ -215,6 +236,116 @@ static void put_avcc(mp4w *w, bytebuf *b)
     bb_free(&sps);
 }
 
+/* MPEG-4 descriptor header with a 4-byte size field, as FFmpeg writes it */
+static void put_descr(bytebuf *b, int tag, unsigned size)
+{
+    bb_u8(b, tag);
+    bb_u8(b, 0x80 | ((size >> 21) & 0x7F));
+    bb_u8(b, 0x80 | ((size >> 14) & 0x7F));
+    bb_u8(b, 0x80 | ((size >> 7) & 0x7F));
+    bb_u8(b, size & 0x7F);
+}
+
+/* the audio trak: AAC (mp4a + esds with the AudioSpecificConfig), track id 2 */
+static void put_audio_trak(mp4w *w, bytebuf *b)
+{
+    size_t trak, mdia, minf, dinf, dref, stbl, stsd, mp4a, box;
+    unsigned dsi = (unsigned)w->a_cfg_len, dcd = 13 + 5 + dsi, es = 3 + 5 + dcd + 5 + 1;
+
+    trak = bb_box(b, "trak");
+    box = bb_fullbox(b, "tkhd", 0, 3);
+    bb_u32(b, 0);
+    bb_u32(b, 0);
+    bb_u32(b, 2);                   /* track id */
+    bb_u32(b, 0);
+    bb_u32(b, 0);                   /* duration */
+    bb_zero(b, 8);
+    bb_u16(b, 0);                   /* layer */
+    bb_u16(b, 1);                   /* alternate group */
+    bb_u16(b, 0x100);               /* volume */
+    bb_u16(b, 0);
+    put_matrix(b);
+    bb_u32(b, 0);                   /* width, height */
+    bb_u32(b, 0);
+    bb_box_end(b, box);
+
+    mdia = bb_box(b, "mdia");
+    box = bb_fullbox(b, "mdhd", 0, 0);
+    bb_u32(b, 0);
+    bb_u32(b, 0);
+    bb_u32(b, (uint32_t)w->a_rate);
+    bb_u32(b, 0);
+    bb_u16(b, 0x55C4);              /* "und" */
+    bb_u16(b, 0);
+    bb_box_end(b, box);
+    box = bb_fullbox(b, "hdlr", 0, 0);
+    bb_u32(b, 0);
+    bb_put(b, "soun", 4);
+    bb_zero(b, 12);
+    bb_put(b, "SoundHandler", 13);
+    bb_box_end(b, box);
+
+    minf = bb_box(b, "minf");
+    box = bb_fullbox(b, "smhd", 0, 0);
+    bb_u16(b, 0);                   /* balance */
+    bb_u16(b, 0);
+    bb_box_end(b, box);
+    dinf = bb_box(b, "dinf");
+    dref = bb_fullbox(b, "dref", 0, 0);
+    bb_u32(b, 1);
+    box = bb_fullbox(b, "url ", 0, 1);
+    bb_box_end(b, box);
+    bb_box_end(b, dref);
+    bb_box_end(b, dinf);
+
+    stbl = bb_box(b, "stbl");
+    stsd = bb_fullbox(b, "stsd", 0, 0);
+    bb_u32(b, 1);
+    mp4a = bb_box(b, "mp4a");
+    bb_zero(b, 6);
+    bb_u16(b, 1);                   /* data reference index */
+    bb_zero(b, 8);                  /* version, revision, vendor */
+    bb_u16(b, w->a_channels);
+    bb_u16(b, 16);                  /* sample size */
+    bb_u16(b, 0);
+    bb_u16(b, 0);
+    bb_u32(b, (uint32_t)(w->a_rate <= 0xFFFF ? w->a_rate : 0) << 16);
+    box = bb_fullbox(b, "esds", 0, 0);
+    put_descr(b, 0x03, es);         /* ES_Descriptor */
+    bb_u16(b, 2);                   /* ES_ID */
+    bb_u8(b, 0);
+    put_descr(b, 0x04, dcd);        /* DecoderConfigDescriptor */
+    bb_u8(b, 0x40);                 /* MPEG-4 audio */
+    bb_u8(b, 0x15);                 /* audio stream */
+    bb_u24(b, 0);                   /* buffer size */
+    bb_u32(b, 0);                   /* max bitrate */
+    bb_u32(b, 0);                   /* average bitrate */
+    put_descr(b, 0x05, dsi);        /* DecoderSpecificInfo: AudioSpecificConfig */
+    bb_put(b, w->a_cfg, dsi);
+    put_descr(b, 0x06, 1);          /* SLConfigDescriptor */
+    bb_u8(b, 0x02);
+    bb_box_end(b, box);
+    bb_box_end(b, mp4a);
+    bb_box_end(b, stsd);
+    box = bb_fullbox(b, "stts", 0, 0);
+    bb_u32(b, 0);
+    bb_box_end(b, box);
+    box = bb_fullbox(b, "stsc", 0, 0);
+    bb_u32(b, 0);
+    bb_box_end(b, box);
+    box = bb_fullbox(b, "stsz", 0, 0);
+    bb_u32(b, 0);
+    bb_u32(b, 0);
+    bb_box_end(b, box);
+    box = bb_fullbox(b, "stco", 0, 0);
+    bb_u32(b, 0);
+    bb_box_end(b, box);
+    bb_box_end(b, stbl);
+    bb_box_end(b, minf);
+    bb_box_end(b, mdia);
+    bb_box_end(b, trak);
+}
+
 static int write_header(mp4w *w)
 {
     bytebuf b = { 0 };
@@ -247,7 +378,7 @@ static int write_header(mp4w *w)
     bb_zero(&b, 10);
     put_matrix(&b);
     bb_zero(&b, 24);
-    bb_u32(&b, 2);                  /* next track id */
+    bb_u32(&b, w->a_rate ? 3 : 2);  /* next track id */
     bb_box_end(&b, box);
 
     trak = bb_box(&b, "trak");
@@ -331,6 +462,8 @@ static int write_header(mp4w *w)
     bb_box_end(&b, minf);
     bb_box_end(&b, mdia);
     bb_box_end(&b, trak);
+    if (w->a_rate)
+        put_audio_trak(w, &b);
 
     mvex = bb_box(&b, "mvex");
     box = bb_fullbox(&b, "trex", 0, 0);
@@ -340,6 +473,15 @@ static int write_header(mp4w *w)
     bb_u32(&b, 0);
     bb_u32(&b, 0);
     bb_box_end(&b, box);
+    if (w->a_rate) {
+        box = bb_fullbox(&b, "trex", 0, 0);
+        bb_u32(&b, 2);
+        bb_u32(&b, 1);
+        bb_u32(&b, 1024);           /* default duration: one AAC frame */
+        bb_u32(&b, 0);
+        bb_u32(&b, 0x02000000);     /* every audio frame is a sync sample */
+        bb_box_end(&b, box);
+    }
     bb_box_end(&b, mvex);
     bb_box_end(&b, moov);
 
@@ -373,7 +515,7 @@ static int write_header(mp4w *w)
 static int flush_fragment(mp4w *w, int64_t next_dts, int have_next)
 {
     bytebuf b = { 0 };
-    size_t moof, traf, box, trun_data_off;
+    size_t moof, traf, box, trun_data_off, atrun_data_off = 0;
     int i;
 
     if (w->n_smp == 0)
@@ -411,9 +553,36 @@ static int flush_fragment(mp4w *w, int64_t next_dts, int have_next)
     }
     bb_box_end(&b, box);
     bb_box_end(&b, traf);
+    if (w->n_asmp) {                /* the audio that arrived during this GOP */
+        traf = bb_box(&b, "traf");
+        box = bb_fullbox(&b, "tfhd", 0, 0x020000);
+        bb_u32(&b, 2);
+        bb_box_end(&b, box);
+        box = bb_fullbox(&b, "tfdt", 1, 0);
+        bb_u64(&b, (uint64_t)w->asmp[0].dts);
+        bb_box_end(&b, box);
+        box = bb_fullbox(&b, "trun", 0, 0x000301);     /* data offset, sample duration and size */
+        bb_u32(&b, w->n_asmp);
+        atrun_data_off = b.len;
+        bb_u32(&b, 0);
+        for (i = 0; i < w->n_asmp; i++) {
+            /* up to the next frame: after lost packets the frame is followed by silence and
+             * the audio stays in sync; the last one gets a frame's length (the next
+             * fragment's tfdt places what follows) */
+            int64_t dur = i + 1 < w->n_asmp ? w->asmp[i + 1].dts - w->asmp[i].dts : w->a_last_duration;
+            if (dur <= 0 || dur > 0x7FFFFFFF)
+                dur = w->a_last_duration;
+            bb_u32(&b, (uint32_t)dur);
+            bb_u32(&b, (uint32_t)w->asmp[i].size);
+        }
+        bb_box_end(&b, box);
+        bb_box_end(&b, traf);
+    }
     bb_box_end(&b, moof);
     bb_set_u32(&b, trun_data_off, (uint32_t)(b.len - moof + 8));   /* first sample after the mdat header */
-    bb_u32(&b, (uint32_t)(w->mdat.len + 8));
+    if (w->n_asmp)
+        bb_set_u32(&b, atrun_data_off, (uint32_t)(b.len - moof + 8 + w->mdat.len));
+    bb_u32(&b, (uint32_t)(w->mdat.len + w->amdat.len + 8));
     bb_put(&b, "mdat", 4);
 
     if (w->n_idx == w->cap_idx) {
@@ -432,8 +601,9 @@ static int flush_fragment(mp4w *w, int64_t next_dts, int have_next)
         w->n_smp = 0;
         return w->out.err ? -1 : 0;
     }
-    if (b.err || fwrite(b.d, 1, b.len, w->f) != b.len ||
-        fwrite(w->mdat.d, 1, w->mdat.len, w->f) != w->mdat.len || fflush(w->f)) {
+    if (b.err || w->amdat.err || fwrite(b.d, 1, b.len, w->f) != b.len ||
+        fwrite(w->mdat.d, 1, w->mdat.len, w->f) != w->mdat.len ||
+        fwrite(w->amdat.d, 1, w->amdat.len, w->f) != w->amdat.len || fflush(w->f)) {
         bb_free(&b);
         return -1;
     }
@@ -442,10 +612,12 @@ static int flush_fragment(mp4w *w, int64_t next_dts, int have_next)
         w->idx[w->n_idx].moof_off = w->file_off;
         w->n_idx++;
     }
-    w->file_off += b.len + w->mdat.len;
+    w->file_off += b.len + w->mdat.len + w->amdat.len;
     bb_free(&b);
     w->mdat.len = 0;
     w->n_smp = 0;
+    w->amdat.len = 0;
+    w->n_asmp = 0;
     return 0;
 }
 
@@ -496,6 +668,16 @@ static void *mp4_open(void *opaque, const char *path, const rc_stream_info *si)
     w->last_duration = w->timescale / 25;
     if (si->extradata && si->extradata_size > 0)
         ps_from_extradata(w, si->extradata, si->extradata_size);
+    if (si->audio_rate > 0 && si->audio_config && si->audio_config_size >= 2 &&
+        si->audio_config_size <= (int)sizeof(w->a_cfg)) {
+        int ch = (si->audio_config[1] >> 3) & 0x0F;    /* channelConfiguration of the AudioSpecificConfig */
+        w->a_rate = si->audio_rate;
+        w->a_channels = ch >= 1 && ch <= 7 ? ch : (si->audio_channels > 0 ? si->audio_channels : 1);
+        memcpy(w->a_cfg, si->audio_config, si->audio_config_size);
+        w->a_cfg_len = si->audio_config_size;
+        w->a_last_duration = 1024;
+    }
+    w->si.audio_config = NULL;
     w->f = fopen(w->part, "wb");
     if (!w->f) {
         log_error("cannot create %s", w->part);
@@ -521,6 +703,8 @@ static int mp4_write(void *h, const rc_packet *p)
     if (!w->have_base) {
         w->have_base = 1;
         w->base_dts = p->dts;
+        if (w->a_rate)
+            w->a_base = (int64_t)llround((double)p->dts * w->a_rate / w->timescale);
     }
     dts = p->dts - w->base_dts;
     if (p->key && w->n_smp && flush_fragment(w, dts, 1) < 0)
@@ -560,6 +744,43 @@ fail:
     return -1;
 }
 
+/* one raw AAC frame; ts in 1/a_rate s on the video's time line. Frames before the first
+ * picture (or before the header could be written) and out-of-order ones are dropped. */
+static int mp4_write_audio(void *h, const uint8_t *data, int size, int64_t ts)
+{
+    mp4w *w = h;
+    int64_t dts;
+    if (w->failed)
+        return -1;
+    if (!w->a_rate || !w->have_base || !w->header_done || size <= 0)
+        return 0;
+    dts = ts - w->a_base;
+    if (dts < 0 || (w->have_a_last && dts <= w->a_last_dts))
+        return 0;
+    if (w->n_asmp == w->cap_asmp) {
+        int cap = w->cap_asmp ? 2 * w->cap_asmp : 256;
+        asample *n = realloc(w->asmp, sizeof(*n) * cap);
+        if (!n)
+            goto fail;
+        w->asmp = n;
+        w->cap_asmp = cap;
+    }
+    w->asmp[w->n_asmp].off = w->amdat.len;
+    w->asmp[w->n_asmp].size = size;
+    w->asmp[w->n_asmp].dts = dts;
+    bb_put(&w->amdat, data, size);
+    if (w->amdat.err)
+        goto fail;
+    w->n_asmp++;
+    w->have_a_last = 1;
+    w->a_last_dts = dts;
+    return 0;
+fail:
+    log_error("write error in %s", w->part);
+    w->failed = 1;
+    return -1;
+}
+
 /* returns 0 if a playable file was produced (it may be shorter than intended after a write
  * error), -1 if nothing usable could be written (the .part is removed) */
 static int mp4_close(void *h)
@@ -586,13 +807,15 @@ static int mp4_close(void *h)
     free(w->sps);
     free(w->pps);
     bb_free(&w->mdat);
+    bb_free(&w->amdat);
     free(w->smp);
+    free(w->asmp);
     free(w->idx);
     free(w);
     return ret;
 }
 
-const rc_video_ops mp4_writer_ops = { mp4_open, mp4_write, mp4_close };
+const rc_video_ops mp4_writer_ops = { mp4_open, mp4_write, mp4_close, mp4_write_audio };
 
 /* ---------------------------------------------------------------- live mode */
 
