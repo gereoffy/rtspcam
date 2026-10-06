@@ -18,6 +18,7 @@ struct mvmap_writer {
     uint8_t *rec;          /* uncompressed record */
     size_t rec_cap;
     uint8_t out[16384];
+    int failed;            /* a write failed: the zlib stream is broken, the file is dropped */
 };
 
 void json_put_string(char *buf, size_t size, const char *s)
@@ -56,13 +57,16 @@ void json_put_double(char *buf, size_t size, double v)
 
 static int write_out(mvmap_writer *m, int flush)
 {
+    if (m->failed)
+        return -1;
     do {
         m->z.next_out = m->out;
         m->z.avail_out = sizeof(m->out);
-        if (deflate(&m->z, flush) == Z_STREAM_ERROR)
+        if (deflate(&m->z, flush) == Z_STREAM_ERROR ||
+            fwrite(m->out, 1, sizeof(m->out) - m->z.avail_out, m->f) != sizeof(m->out) - m->z.avail_out) {
+            m->failed = 1;
             return -1;
-        if (fwrite(m->out, 1, sizeof(m->out) - m->z.avail_out, m->f) != sizeof(m->out) - m->z.avail_out)
-            return -1;
+        }
     } while (m->z.avail_out == 0);
     return 0;
 }
@@ -112,7 +116,8 @@ static mvmap_writer *open_stream(const char *path, const char *magic, const char
     len[1] = (hl >> 8) & 0xFF;
     len[2] = (hl >> 16) & 0xFF;
     len[3] = (hl >> 24) & 0xFF;
-    if (fwrite(magic, 1, 8, m->f) != 8 || fwrite(len, 1, 4, m->f) != 4 || fwrite(hdr, 1, hl, m->f) != hl)
+    if (fwrite(magic, 1, 8, m->f) != 8 || fwrite(len, 1, 4, m->f) != 4 || fwrite(hdr, 1, hl, m->f) != hl ||
+        fflush(m->f))                           /* a full disk shows up here, not at the close */
         goto fail;
     if (deflateInit(&m->z, 6) != Z_OK)
         goto fail;
@@ -120,8 +125,10 @@ static mvmap_writer *open_stream(const char *path, const char *magic, const char
     free(hdr);
     return m;
 fail:
-    if (m->f)
+    if (m->f) {
         fclose(m->f);
+        remove(part);
+    }
     free(part);
     free(hdr);
     free(m->path);
@@ -237,12 +244,16 @@ int mvmap_close(mvmap_writer *m)
     if (write_out(m, Z_FINISH) < 0)
         ret = -1;
     deflateEnd(&m->z);
-    if (fclose(m->f))
+    if (fclose(m->f)) {
+        m->failed = 1;
         ret = -1;
+    }
     part = malloc(strlen(m->path) + 6);
     if (part) {
         sprintf(part, "%s.part", m->path);
-        if (rename(part, m->path))
+        if (m->failed)
+            remove(part);                   /* a broken zlib stream is useless */
+        else if (rename(part, m->path))
             ret = -1;
         free(part);
     }

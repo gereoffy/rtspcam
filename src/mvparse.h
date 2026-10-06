@@ -53,6 +53,10 @@ typedef struct mvp_frame {
     int vcl_bytes;        /* coded size of the picture: RBSP bytes of its slice NAL units, without the NAL
                              header byte, start codes/length fields, parameter sets/SEI, emulation
                              prevention bytes and trailing zero padding */
+    const char *reason;   /* MVP_UNSUPPORTED: what the stream uses that is not supported (static
+                             string), else NULL */
+    int no_ps;            /* MVP_UNSUPPORTED because the slices refer to an SPS/PPS not seen yet
+                             (usually temporary: they may still come in-band) */
 } mvp_frame;
 
 typedef struct mvp_ctx mvp_ctx;

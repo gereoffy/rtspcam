@@ -63,9 +63,9 @@ int rct_set_stream(test_session *t, const uint8_t *ex, int size, int tb_num, int
     return rcs_set_stream(t->s, ex, size, tb_num, tb_den, nal_length_size);
 }
 
-int rct_packet(test_session *t, const uint8_t *data, int size, long long dts, long long pts, int key)
+int rct_packet(test_session *t, const uint8_t *data, int size, long long dts, long long pts, int key, int broken)
 {
-    return rcs_packet(t->s, data, size, dts, pts, key);
+    return rcs_packet(t->s, data, size, dts, pts, key, broken);
 }
 
 void rct_quiet(int q)

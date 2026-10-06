@@ -221,6 +221,14 @@ static int write_header(mp4w *w)
     size_t moov, trak, mdia, minf, dinf, dref, stbl, stsd, avc1, mvex, box;
     int width = w->si.width, height = w->si.height;
     static const uint8_t compressor[32] = { 0 };
+    sps_info inf;
+
+    /* the size of the stream as the SPS says it (the caller's value is the initial one and the
+     * camera may have been reconfigured since) */
+    if (w->sps && sps_params(w->sps, w->sps_len, &inf) == 0 && inf.width > 0 && inf.height > 0) {
+        width = inf.width;
+        height = inf.height;
+    }
 
     box = bb_box(&b, "ftyp");
     bb_put(&b, "iso5", 4);
@@ -351,7 +359,7 @@ static int write_header(mp4w *w)
         w->header_done = 1;
         return 0;
     }
-    if (fwrite(b.d, 1, b.len, w->f) != b.len) {
+    if (fwrite(b.d, 1, b.len, w->f) != b.len || fflush(w->f)) {
         bb_free(&b);
         return -1;
     }
@@ -424,16 +432,15 @@ static int flush_fragment(mp4w *w, int64_t next_dts, int have_next)
         w->n_smp = 0;
         return w->out.err ? -1 : 0;
     }
-    if (w->n_idx < w->cap_idx) {
-        w->idx[w->n_idx].time = w->smp[0].dts;
-        w->idx[w->n_idx].moof_off = w->file_off;
-        w->n_idx++;
-    }
-
     if (b.err || fwrite(b.d, 1, b.len, w->f) != b.len ||
         fwrite(w->mdat.d, 1, w->mdat.len, w->f) != w->mdat.len || fflush(w->f)) {
         bb_free(&b);
         return -1;
+    }
+    if (w->n_idx < w->cap_idx) {
+        w->idx[w->n_idx].time = w->smp[0].dts;
+        w->idx[w->n_idx].moof_off = w->file_off;
+        w->n_idx++;
     }
     w->file_off += b.len + w->mdat.len;
     bb_free(&b);
@@ -553,6 +560,8 @@ fail:
     return -1;
 }
 
+/* returns 0 if a playable file was produced (it may be shorter than intended after a write
+ * error), -1 if nothing usable could be written (the .part is removed) */
 static int mp4_close(void *h)
 {
     mp4w *w = h;
@@ -561,12 +570,13 @@ static int mp4_close(void *h)
         return 0;
     if (!w->failed && w->header_done) {
         if (flush_fragment(w, 0, 0) < 0 || write_mfra(w) < 0)
-            ret = -1;
+            w->failed = 1;
     }
     if (fclose(w->f))
+        w->failed = 1;
+    if (!w->header_done || w->n_idx == 0) {
+        remove(w->part);                        /* no complete fragment: nothing playable */
         ret = -1;
-    if (!w->header_done) {
-        remove(w->part);                        /* nothing usable was written */
     } else if (rename(w->part, w->path)) {
         log_error("cannot rename %s", w->part);
         ret = -1;

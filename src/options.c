@@ -11,7 +11,7 @@
 
 #include "options.h"
 
-enum { T_STR, T_FLOAT, T_INT, T_TRUE, T_FALSE, T_APPEND, T_FIX, T_TRANSPORT };
+enum { T_STR, T_FLOAT, T_INT, T_TRUE, T_FALSE, T_APPEND, T_FIX };
 
 typedef struct opt_def {
     const char *flag;       /* long flag */
@@ -28,7 +28,6 @@ static const opt_def opts[] = {
     { "--name", "-n", "name", T_STR, OFF(name), "camera name (used in paths), required" },
     { "--config", NULL, "config", T_STR, OFF(config), "JSON file with tuned heuristics (saved by tune.py)" },
     { "--out", "-o", "out", T_STR, OFF(out), "output root directory (recordings)" },
-    { "--transport", NULL, "transport", T_TRANSPORT, OFF(transport), "tcp|udp (tcp)" },
     { "--timeout", NULL, "timeout", T_FLOAT, OFF(timeout), "network timeout in s (10)" },
     { "--always", NULL, "always", T_TRUE, OFF(always), "record continuously (segments only)" },
     { "--mv-min", NULL, "mv_min", T_FLOAT, OFF(mv_min), "min vector length in pixels (1.0)" },
@@ -51,6 +50,7 @@ static const opt_def opts[] = {
     { "--cheap", NULL, "cheap", T_TRUE, OFF(cheap), "accepted for compatibility (no effect)" },
     { "--debug", NULL, "debug", T_TRUE, OFF(debug), "per-frame scores in the log" },
     { "--viewonly", NULL, "viewonly", T_TRUE, OFF(viewonly), "no recordings: detection and --live only (alarm/event state still shown)" },
+    { "--min-free", NULL, "min_free", T_FLOAT, OFF(min_free), "MB of free disk space needed to start a recording; below it the recorder switches to view-only until restarted (100, 0: off)" },
     { "--force", NULL, "force", T_TRUE, OFF(force), "file input: overwrite an existing .mvmap" },
 };
 #define N_OPTS (int)(sizeof(opts) / sizeof(opts[0]))
@@ -72,7 +72,6 @@ static void set_defaults(rc_opts *o)
 {
     memset(o, 0, sizeof(*o));
     o->out = strdup("recordings");
-    o->transport = strdup("tcp");
     o->timeout = 10;
     o->mv_min = 1.0;
     o->min_blocks = 4;
@@ -87,6 +86,7 @@ static void set_defaults(rc_opts *o)
     o->max_tail = 5;
     o->fix = FIX_INLINE;
     o->map = 1;
+    o->min_free = 100;
 }
 
 void rc_opts_free(rc_opts *o)
@@ -99,7 +99,6 @@ void rc_opts_free(rc_opts *o)
     free(o->name);
     free(o->config);
     free(o->out);
-    free(o->transport);
     free(o->live);
     for (i = 0; i < o->n_ignore; i++)
         free(o->ignore[i]);
@@ -148,13 +147,6 @@ static int set_from_string(rc_opts *o, const opt_def *d, const char *val, char *
     case T_STR:
         free(*FIELD(o, d, char *));
         *FIELD(o, d, char *) = strdup(val);
-        return 0;
-    case T_TRANSPORT:
-        if (strcmp(val, "tcp") && strcmp(val, "udp"))
-            break;
-        free(o->transport);
-    free(o->live);
-        o->transport = strdup(val);
         return 0;
     case T_FLOAT:
         if (parse_float(val, FIELD(o, d, double)) < 0)

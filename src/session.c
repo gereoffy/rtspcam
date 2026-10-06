@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/time.h>
 #include <time.h>
 
@@ -14,6 +15,10 @@
 #include "mvmap_writer.h"
 #include "mvparse.h"
 #include "session.h"
+
+#define NOKEY_WARN_S 30.0       /* warn when no key frame arrived for this long at the start */
+#define ERR_STREAK_WARN 50      /* warn after this many consecutive unparseable pictures */
+#define NOPS_WARN_S 10.0        /* warn when the slices had no SPS/PPS for this long */
 
 /* a packet waiting in the pre-roll buffer, with its map record */
 typedef struct buf_pkt {
@@ -33,6 +38,7 @@ typedef struct segment {
     int vec_n;              /* grid size the .mvvec header announces */
     int have_t0;
     double t0, first_ts, last_ts;
+    int failed;             /* a write failed (logged once) */
 } segment;
 
 struct rc_session {
@@ -46,8 +52,15 @@ struct rc_session {
     mt_det det;
 
     double wall0, ts0, last_ts, last_motion_ts, seg_start_ts;
+    int fixed_wall;         /* wall0 was given: file names from wall0 + stream time */
     int since_key;          /* pictures since the last key frame (--skip-after-key) */
     int have_ts0, synced, moving_now;
+    int viewonly;           /* --viewonly, or switched to it after a disk failure: no files */
+    /* stream diagnostics, each warned once */
+    double unsync_t0;       /* stream time of the first packet while waiting for a key frame */
+    int have_unsync_t0, warned_nokey, warned_unsupported, warned_errors, err_streak;
+    double nops_t0;         /* stream time since when the slices refer to a missing SPS/PPS */
+    int have_nops_t0, warned_nops;
 
     buf_pkt *buf;
     int buf_n, buf_cap;
@@ -120,6 +133,49 @@ int mkdir_p(const char *dir)
     return 0;
 }
 
+/* the "video writer" of view-only mode */
+static void *null_open(void *opaque, const char *path, const rc_stream_info *si)
+{
+    (void)opaque; (void)path; (void)si;
+    return (void *)1;
+}
+
+static int null_write(void *h, const rc_packet *p)
+{
+    (void)h; (void)p;
+    return 0;
+}
+
+static int null_close(void *h)
+{
+    (void)h;
+    return 0;
+}
+
+const rc_video_ops rcs_null_ops = { null_open, null_write, null_close };
+#define null_ops rcs_null_ops
+
+/* Disk full, unwritable directory, write error: from now on the session behaves as with
+ * --viewonly (analysis, alarms and --live go on, nothing is written). Recording resumes with a
+ * restart of the program, after the space was freed. */
+static void go_viewonly(rc_session *s, const char *why)
+{
+    if (s->viewonly)
+        return;
+    s->viewonly = 1;
+    log_error("%s: switching to view-only mode (no recordings, no .mvmap/.mvvec); free space and restart the "
+              "recorder", why);
+}
+
+/* MB free on the output disk (the root directory is created if needed), or -1 if unknown */
+static double free_mb(const char *dir)
+{
+    struct statvfs vs;
+    if (statvfs(dir, &vs) < 0 && (mkdir_p(dir) < 0 || statvfs(dir, &vs) < 0))
+        return -1;
+    return (double)vs.f_bavail * vs.f_frsize / (1024.0 * 1024.0);
+}
+
 static double now(void)
 {
     struct timeval tv;
@@ -136,6 +192,8 @@ rc_session *rcs_create(const rc_opts *a, double wall0, const rc_video_ops *ops, 
     s->ops = ops;
     s->opaque = opaque;
     s->wall0 = wall0 > 0 ? wall0 : now();
+    s->fixed_wall = wall0 > 0;
+    s->viewonly = a->viewonly;
     s->last_motion_ts = -1e9;
     s->si.tb_num = 1;
     s->si.tb_den = 90000;
@@ -180,23 +238,35 @@ int rcs_set_stream(rc_session *s, const uint8_t *extradata, int size, int tb_num
     return 0;
 }
 
-/* <out>/<name>/<YYYY-MM-DD>/<name>_<HHMMSS>.mp4 for the given wall clock time */
+/* <out>/<name>/<YYYY-MM-DD>/<name>_<HHMMSS>.mp4 for the given wall clock time; if that name is
+ * taken (a recording from the repeated hour at the end of DST, a restarted clock), _1, _2, ... */
 static char *out_path(const rc_opts *a, double wall)
 {
     long long us = llround(wall * 1e6);
     time_t t = (time_t)(us >= 0 ? us / 1000000 : -((-us + 999999) / 1000000));
     struct tm tm;
-    char day[16], hms[16];
+    struct stat st;
+    char day[16], hms[16], part[4096];
     size_t n;
     char *p;
+    int k;
 
     localtime_r(&t, &tm);
     strftime(day, sizeof(day), "%Y-%m-%d", &tm);
     strftime(hms, sizeof(hms), "%H%M%S", &tm);
     n = strlen(a->out) + 2 * strlen(a->name) + 64;
     p = malloc(n);
-    if (p)
-        snprintf(p, n, "%s/%s/%s/%s_%s.mp4", a->out, a->name, day, a->name, hms);
+    if (!p)
+        return NULL;
+    for (k = 0; k < 100; k++) {
+        if (k == 0)
+            snprintf(p, n, "%s/%s/%s/%s_%s.mp4", a->out, a->name, day, a->name, hms);
+        else
+            snprintf(p, n, "%s/%s/%s/%s_%s_%d.mp4", a->out, a->name, day, a->name, hms, k);
+        snprintf(part, sizeof(part), "%s.part", p);
+        if (a->viewonly || (stat(p, &st) < 0 && stat(part, &st) < 0))
+            break;
+    }
     return p;
 }
 
@@ -242,17 +312,17 @@ static segment *segment_open(rc_session *s, const char *path)
         goto fail;
     g->path = strdup(path);
     slash = strrchr(dir, '/');
-    if (slash && !s->a->viewonly) {
+    if (slash && !s->viewonly) {
         *slash = 0;
         if (mkdir_p(dir) < 0) {
             log_error("cannot create directory %s", dir);
             goto fail;
         }
     }
-    g->video = s->ops->open(s->opaque, path, &s->si);
+    g->video = (s->viewonly ? &null_ops : s->ops)->open(s->opaque, path, &s->si);
     if (!g->video)
         goto fail;
-    if (s->a->map) {
+    if (s->a->map && !s->viewonly) {
         char *hdr = map_header(s);
         size_t n = strlen(path);
         char *mp = malloc(n + 8);
@@ -272,7 +342,7 @@ static segment *segment_open(rc_session *s, const char *path)
         free(hdr);
         free(mp);
     }
-    if (s->a->vectors) {
+    if (s->a->vectors && !s->viewonly) {
         char vp[4096], hdr[1024], name[512];
         const char *mp = s->map_path ? s->map_path : path;
         const char *dot = strrchr(mp, '.'), *sl = strrchr(mp, '/');
@@ -299,33 +369,68 @@ fail:
     return NULL;
 }
 
-static void segment_write(rc_session *s, segment *g, const rc_packet *p, const mt_record *rec, const uint8_t *vec,
-                          int vec_n, int vcl_bytes)
+/* returns -1 if the video or a sidecar could not be written (disk full?) */
+static int segment_write(rc_session *s, segment *g, const rc_packet *p, const mt_record *rec, const uint8_t *vec,
+                         int vec_n, int vcl_bytes)
 {
+    int r = 0;
     if (!g->have_t0) {
         g->have_t0 = 1;
         g->t0 = p->ts;
         g->first_ts = p->ts;
     }
     g->last_ts = p->ts;
-    if (s->ops->write(g->video, p) < 0)
-        log_warn("write error in %s", g->path);
-    if (g->map && rec)
-        mvmap_write(g->map, (long)nearbyint((p->ts - g->t0) * 1000), rec);
-    if (g->vec)     /* a grid of another size (stream resolution changed) is left out */
+    if ((s->viewonly ? &null_ops : s->ops)->write(g->video, p) < 0)
+        r = -1;
+    if (g->map && rec && mvmap_write(g->map, (long)nearbyint((p->ts - g->t0) * 1000), rec) < 0)
+        r = -1;
+    if (g->vec &&   /* a grid of another size (stream resolution changed) is left out */
         mvvec_write(g->vec, (long)nearbyint((p->ts - g->t0) * 1000), (uint32_t)p->size, (uint32_t)vcl_bytes,
-                    vec_n == g->vec_n ? vec : NULL, g->vec_n);
+                    vec_n == g->vec_n ? vec : NULL, g->vec_n) < 0)
+        r = -1;
+    if (r < 0)
+        g->failed = 1;          /* the writer has logged it; finish() closes the recording */
+    return r;
 }
 
-static void segment_close(rc_session *s, segment *g)
+/* <video path with the extension replaced by ext>, malloc'ed */
+static char *sidecar_path(const char *path, const char *ext)
 {
-    if (g->map)
-        mvmap_close(g->map);
-    if (g->vec)
-        mvmap_close(g->vec);
-    s->ops->close(g->video);
+    const char *dot = strrchr(path, '.'), *slash = strrchr(path, '/');
+    size_t base = dot && (!slash || dot > slash) ? (size_t)(dot - path) : strlen(path);
+    char *p = malloc(base + strlen(ext) + 1);
+    if (p) {
+        memcpy(p, path, base);
+        strcpy(p + base, ext);
+    }
+    return p;
+}
+
+/* returns -1 if the video or a sidecar could not be written or closed. Without a playable
+ * video file the sidecars are removed too. */
+static int segment_close(rc_session *s, segment *g)
+{
+    int r = g->failed ? -1 : 0, had_map = g->map != NULL, had_vec = g->vec != NULL;
+    if (g->map && mvmap_close(g->map) < 0)
+        r = -1;
+    if (g->vec && mvmap_close(g->vec) < 0)
+        r = -1;
+    if ((s->viewonly ? &null_ops : s->ops)->close(g->video) < 0) {
+        r = -1;
+        if (!s->map_path) {
+            char *mp = had_map ? sidecar_path(g->path, ".mvmap") : NULL;
+            char *vp = had_vec ? sidecar_path(g->path, ".mvvec") : NULL;
+            if (mp)
+                remove(mp);
+            if (vp)
+                remove(vp);
+            free(mp);
+            free(vp);
+        }
+    }
     free(g->path);
     free(g);
+    return r;
 }
 
 static void buf_free_pkt(buf_pkt *b)
@@ -390,14 +495,47 @@ static int buf_append(rc_session *s, const rc_packet *p, const mt_record *rec, c
 static void start(rc_session *s, double ts)
 {
     double first_ts = s->buf[0].p.ts;
-    char *path = s->map_path ? strdup(s->map_path) : out_path(s->a, s->wall0 + first_ts - s->ts0);
-    segment *g = path ? segment_open(s, path) : NULL;
+    /* the wall clock time of the first buffered picture: now minus the buffered stream time
+     * (a camera's clock drifts and its timestamps may jump; the session start + stream time
+     * would drift with it) */
+    double wall = s->fixed_wall ? s->wall0 + first_ts - s->ts0 : now() - (ts - first_ts);
+    char *path;
+    segment *g;
     int i;
 
+    /* A file must begin with a key frame. After a cut at a non-key frame (--max-tail, a write
+     * error) the buffer may begin mid-GOP: those pictures are dropped; if no key frame is
+     * buffered yet, the recording starts with the next one (motion is kept in the buffer). */
+    if (!s->map_path) {
+        for (i = 0; i < s->buf_n && !s->buf[i].p.key; i++)
+            ;
+        if (i == s->buf_n)
+            return;
+        if (i > 0)
+            buf_drop_front(s, i);
+        first_ts = s->buf[0].p.ts;
+        wall = s->fixed_wall ? s->wall0 + first_ts - s->ts0 : now() - (ts - first_ts);
+    }
+    if (!s->viewonly && !s->map_path && s->a->min_free > 0) {
+        double mb = free_mb(s->a->out);
+        if (mb >= 0 && mb < s->a->min_free) {
+            char why[256];
+            snprintf(why, sizeof(why), "only %.0f MB free in %s (--min-free %.0f)", mb, s->a->out, s->a->min_free);
+            go_viewonly(s, why);
+        }
+    }
+    path = s->map_path ? strdup(s->map_path) : out_path(s->a, wall);
+    g = path ? segment_open(s, path) : NULL;
+    if (!g && !s->viewonly) {
+        char why[4600];
+        snprintf(why, sizeof(why), "cannot start recording %s", path ? path : "");
+        go_viewonly(s, why);
+        g = path ? segment_open(s, path) : NULL;      /* as a view-only "recording" */
+    }
     if (!g) {
         log_error("cannot start recording %s", path ? path : "");
         free(path);
-        return;                 /* the buffer is kept; the next packet retries */
+        return;                 /* the buffer is kept (trimmed to the pre-roll); the next packet retries */
     }
     for (i = 0; i < s->buf_n; i++)
         segment_write(s, g, &s->buf[i].p, s->buf[i].has_rec ? &s->buf[i].rec : NULL, s->buf[i].vec,
@@ -405,7 +543,7 @@ static void start(rc_session *s, double ts)
     buf_drop_front(s, s->buf_n);
     s->writer = g;
     s->seg_start_ts = first_ts;
-    if (s->a->viewonly)
+    if (s->viewonly)
         log_info("EVENT start (view only, not recorded; pre-roll %.1fs, stream t=%.1fs)", ts - first_ts, ts - s->ts0);
     else if (!s->map_path)
         log_info("REC start %s (pre-roll %.1fs, stream t=%.1fs)", path, ts - first_ts, ts - s->ts0);
@@ -422,12 +560,39 @@ static void finish(rc_session *s)
     s->writer = NULL;
     path = strdup(g->path);
     len = g->last_ts - g->first_ts;
-    segment_close(s, g);
-    if (s->a->viewonly)
+    if (segment_close(s, g) < 0 && !s->viewonly) {
+        char why[4600];
+        snprintf(why, sizeof(why), "cannot write %s", path ? path : "");
+        go_viewonly(s, why);
+    }
+    if (s->viewonly)
         log_info("EVENT stop  (view only, %.1fs, stream t=%.1fs)", len, s->last_ts - s->ts0);
     else if (!s->map_path)
         log_info("REC stop  %s (%.1fs, stream t=%.1fs)", path ? path : "", len, s->last_ts - s->ts0);
     free(path);
+}
+
+/* Not recording, a key frame has just been buffered: drop what cannot be part of a recording.
+ * After a cut at a non-key frame (--max-tail) the buffer begins mid-GOP: a file cannot start
+ * with those pictures. Then drop the GOPs that are fully older than the pre-roll window. */
+static void trim_buffer(rc_session *s, double ts)
+{
+    int i;
+    for (i = 0; i < s->buf_n && !s->buf[i].p.key; i++)
+        ;
+    if (i > 0 && i < s->buf_n)
+        buf_drop_front(s, i);
+    for (;;) {
+        int k1 = -1, seen = 0;
+        for (i = 0; i < s->buf_n; i++)
+            if (s->buf[i].p.key && ++seen == 2) {
+                k1 = i;
+                break;
+            }
+        if (k1 < 0 || !(ts - s->buf[k1].p.ts >= s->a->pre_roll))
+            break;
+        buf_drop_front(s, k1);
+    }
 }
 
 /* --vectors: longest vector per cell of an analysed picture (session-owned buffer) */
@@ -451,7 +616,7 @@ static const uint8_t *vec_grid(rc_session *s, const mvp_frame *fr, int *n)
     return s->vec;
 }
 
-int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_t pts, int key)
+int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_t pts, int key, int broken)
 {
     const rc_opts *a = s->a;
     rc_packet p;
@@ -460,16 +625,25 @@ int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_
     const uint8_t *vec = NULL;
     int vec_n = 0, skip;
     double ts;
-    int want, i;
+    int want;
 
     if (size <= 0)
         return 0;
+    ts = (double)(dts * s->si.tb_num) / s->si.tb_den;
     if (!s->synced) {               /* decoding mid-GOP yields garbage vectors */
-        if (!key)
+        if (!key) {
+            if (!s->have_unsync_t0) {
+                s->have_unsync_t0 = 1;
+                s->unsync_t0 = ts;
+            } else if (!s->warned_nokey && ts - s->unsync_t0 >= NOKEY_WARN_S) {
+                s->warned_nokey = 1;
+                log_warn("no key frame (IDR) in the first %.0f s of the stream: nothing is analysed or recorded "
+                         "until one arrives (does the camera send I frames?)", NOKEY_WARN_S);
+            }
             return 0;
+        }
         s->synced = 1;
     }
-    ts = (double)(dts * s->si.tb_num) / s->si.tb_den;
     s->last_ts = ts;
     if (!s->have_ts0) {
         s->have_ts0 = 1;
@@ -478,6 +652,34 @@ int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_
 
     /* --- analysis --- */
     skip = mvp_decode(s->mvp, data, size, s->si.nal_length_size, &fr) == 0 && fr.type != MVP_NONE;
+    if (fr.type == MVP_UNSUPPORTED && fr.no_ps) {
+        /* usually temporary: the parameter sets may come in-band later (with a key frame) */
+        if (!s->have_nops_t0) {
+            s->have_nops_t0 = 1;
+            s->nops_t0 = ts;
+        } else if (!s->warned_nops && ts - s->nops_t0 >= NOPS_WARN_S) {
+            s->warned_nops = 1;
+            log_warn("no SPS/PPS for %.0f s (none in the SDP, none in the stream so far): the pictures cannot be "
+                     "analysed until the camera sends them", NOPS_WARN_S);
+        }
+    } else if (fr.type != MVP_NONE && s->have_nops_t0) {
+        if (s->warned_nops)
+            log_info("SPS/PPS arrived, the pictures are analysed from now on");
+        s->have_nops_t0 = s->warned_nops = 0;
+    }
+    if (fr.type == MVP_UNSUPPORTED && !fr.no_ps && !s->warned_unsupported) {
+        s->warned_unsupported = 1;
+        log_warn("the stream uses %s: the motion vectors cannot be read, there is no motion detection "
+                 "(recording only with --always)", fr.reason ? fr.reason : "an unsupported coding");
+    }
+    if (fr.type == MVP_P && !broken) {
+        s->err_streak = fr.errors ? s->err_streak + 1 : 0;
+        if (s->err_streak == ERR_STREAK_WARN && !s->warned_errors) {
+            s->warned_errors = 1;
+            log_warn("the last %d pictures could not be parsed (damaged or unusual stream?): no motion detection "
+                     "while this lasts", ERR_STREAK_WARN);
+        }
+    }
     if (skip) {
         s->since_key = fr.key ? 0 : s->since_key + 1;
         /* hierarchical P frames: the reference is several frames back, moving objects are
@@ -495,7 +697,7 @@ int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_
             rec.cells = NULL;
             recp = &rec;
         }
-    } else if ((fr.type == MVP_P || fr.type == MVP_I) && !fr.errors) {
+    } else if (!broken && (fr.type == MVP_P || fr.type == MVP_I) && !fr.errors) {
         int m = mt_update(&s->det, &fr);
         if (a->vectors && m >= 0)          /* analysed picture (an all-intra one gets a zero grid) */
             vec = vec_grid(s, &fr, &vec_n);
@@ -508,6 +710,11 @@ int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_
             mt_record_get(&s->det, m, s->moving_now, &rec);
             recp = &rec;
         }
+    }
+    if (s->det.w != s->si.width || s->det.h != s->si.height) {   /* the camera was reconfigured */
+        s->si.width = s->det.w;
+        s->si.height = s->det.h;
+        log_info("stream: %dx%d", s->det.w, s->det.h);
     }
     if (a->map && !recp) {          /* no usable picture: keep one record per packet */
         rec.cluster = 0;
@@ -541,22 +748,10 @@ int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_
     if (!s->writer) {
         if (buf_append(s, &p, recp, vec, vec_n, fr.vcl_bytes) < 0)
             return -1;
-        if (want) {
+        if (want)
             start(s, ts);
-        } else if (key) {
-            /* drop GOPs that are fully older than the pre-roll window */
-            for (;;) {
-                int k1 = -1, seen = 0;
-                for (i = 0; i < s->buf_n; i++)
-                    if (s->buf[i].p.key && ++seen == 2) {
-                        k1 = i;
-                        break;
-                    }
-                if (k1 < 0 || !(ts - s->buf[k1].p.ts >= a->pre_roll))
-                    break;
-                buf_drop_front(s, k1);
-            }
-        }
+        if (!s->writer && key)      /* not recording (or the start failed): bounded buffer */
+            trim_buffer(s, ts);
     } else {
         int rotate = key && ts - s->seg_start_ts >= a->max_segment;
         if ((!want || rotate) && key) {
@@ -565,12 +760,17 @@ int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_
                 return -1;
             if (want)
                 start(s, ts);
+            if (!s->writer)
+                trim_buffer(s, ts);
         } else if (!want && ts - s->last_motion_ts >= a->post_roll + a->max_tail) {
             finish(s);              /* no key frame arrived in time; cut anyway */
             if (buf_append(s, &p, recp, vec, vec_n, fr.vcl_bytes) < 0)
                 return -1;
-        } else {
-            segment_write(s, s->writer, &p, recp, vec, vec_n, fr.vcl_bytes);
+        } else if (segment_write(s, s->writer, &p, recp, vec, vec_n, fr.vcl_bytes) < 0) {
+            /* disk full or similar: close what could be written; finish() switches to view-only */
+            finish(s);
+            if (buf_append(s, &p, recp, vec, vec_n, fr.vcl_bytes) < 0)
+                return -1;
         }
     }
     return 0;

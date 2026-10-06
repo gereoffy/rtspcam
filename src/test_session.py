@@ -159,7 +159,7 @@ def run_c(clip, out, args):
     lib.rct_set_stream.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int,
                                    ctypes.c_int, ctypes.c_int]
     lib.rct_packet.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_longlong,
-                               ctypes.c_longlong, ctypes.c_int]
+                               ctypes.c_longlong, ctypes.c_int, ctypes.c_int]
     lib.rct_free.argtypes = [ctypes.c_void_p]
 
     # rtspcam.py analyses every picture: the C default (--max-ref-dist 1) would leave some out
@@ -183,7 +183,7 @@ def run_c(clip, out, args):
         data = bytes(pkt)
         c0 = time.process_time()
         lib.rct_packet(t, data, len(data), pkt.dts, pkt.pts if pkt.pts is not None else pkt.dts,
-                       1 if pkt.is_keyframe else 0)
+                       1 if pkt.is_keyframe else 0, 0)
         cpu += time.process_time() - c0
     c0 = time.process_time()
     lib.rct_free(t)

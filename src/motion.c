@@ -179,14 +179,14 @@ int mt_update(mt_det *d, const mvp_frame *f)
     const rc_opts *a = d->a;
     int moving;
 
-    if (f->key) {
-        d->last_valid = 0;
-        return -1;
-    }
     if (f->width && (f->width != d->w || f->height != d->h)) {
         mt_free(d);
         if (mt_init(d, a, f->width, f->height) < 0)
             return -1;
+    }
+    if (f->key) {
+        d->last_valid = 0;
+        return -1;
     }
     score(d, f);
     d->last_valid = 1;

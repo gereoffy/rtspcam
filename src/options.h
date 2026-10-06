@@ -10,10 +10,10 @@ typedef struct rc_opts {
     int n_inputs;
     int force;              /* file mode: overwrite an existing .mvmap */
     int viewonly;           /* analyse and serve --live, but write no files */
+    double min_free;        /* MB that must be free on the output disk to start a recording (0: no check) */
     char *name;
     char *config;
     char *out;
-    char *transport;        /* "tcp" or "udp" */
     double timeout;
     int always;
     /* motion heuristics */
@@ -24,7 +24,7 @@ typedef struct rc_opts {
     int window;
     int trigger_frames;
     int max_ref_dist;
-    int skip_after_key;     /* leave out the first N pictures after a key frame (low-bitrate cameras) */       /* analyse only pictures whose reference is at most this many frames back (0: all) */
+    int skip_after_key;     /* leave out the first N pictures after a key frame (low-bitrate cameras) */
     char **ignore;          /* "x0,y0,x1,y1" strings, as given */
     int n_ignore;
     double pre_roll;

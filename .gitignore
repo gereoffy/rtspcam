@@ -1,0 +1,10 @@
+# local test data and camera configs (not for the repository)
+configs/
+tune_clips/
+# build output
+src/*.o
+src/rtspcam
+src/mvdump
+src/*.so
+src/*.dylib
+__pycache__/

@@ -1852,6 +1852,8 @@ typedef struct PicState {
     int parsed_p, skipped_p;   /* P slices parsed / skipped for a far reference */
     int vcl_bytes;     /* RBSP bytes of all slices of the picture */
     int skip_dist;     /* nearest reference distance of the skipped slices */
+    const char *reason;    /* MVP_UNSUPPORTED: what the stream uses that is not supported */
+    int no_ps;             /* a slice refers to an SPS/PPS that was not seen yet */
 } PicState;
 
 static void start_picture(mvp_ctx *c, PicState *ps, const SPS *sps)
@@ -2124,18 +2126,23 @@ static int decode_slice(mvp_ctx *c, PicState *ps, const uint8_t *nal, int nal_si
         return -1;
     slice_type %= 5;
     pps_id = br_ue(&r);
-    if (pps_id >= 256 || !c->pps[pps_id].valid)
+    if (pps_id >= 256 || !c->pps[pps_id].valid || !c->sps[c->pps[pps_id].sps_id].valid) {
+        if (ps->type == MVP_NONE)
+            ps->type = MVP_UNSUPPORTED;
+        ps->no_ps = 1;
         return -2;
+    }
     pps = &c->pps[pps_id];
     sps = &c->sps[pps->sps_id];
-    if (!sps->valid)
-        return -2;
     if (idr)
         ps->key = 1;
 
     if (slice_type == 1 || !pps->cabac || pps->slice_group_count > 1 || !sps->frame_mbs_only_flag ||
         (sps->chroma_format_idc != 0 && sps->chroma_format_idc != 1)) {
         ps->type = MVP_UNSUPPORTED;       /* B, CAVLC, FMO, interlace, 4:2:2/4:4:4 */
+        ps->reason = slice_type == 1 ? "B slices" : !pps->cabac ? "CAVLC entropy coding (Baseline profile?)" :
+                     pps->slice_group_count > 1 ? "FMO slice groups" : !sps->frame_mbs_only_flag ? "interlaced coding" :
+                     "4:2:2/4:4:4 chroma";
         c->dpb_valid = 0;                 /* reference marking is not followed for these */
         return -2;
     }
@@ -2538,6 +2545,8 @@ int mvp_decode(mvp_ctx *c, const uint8_t *data, int size, int nal_length_size, m
     out->errors = ps.errors;
     out->poc = ps.poc_known ? ps.poc : 0;
     out->vcl_bytes = ps.vcl_bytes;
+    out->reason = ps.reason;
+    out->no_ps = ps.no_ps && !ps.reason;
     if (ps.sps) {
         out->width = ps.sps->width;
         out->height = ps.sps->height;

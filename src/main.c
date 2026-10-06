@@ -64,7 +64,8 @@ static void recover_parts(const char *dir, int depth)
             if (depth < 4)
                 recover_parts(p, depth + 1);
         } else if ((n > 9 && !strcmp(e->d_name + n - 9, ".mp4.part")) ||
-                   (n > 11 && !strcmp(e->d_name + n - 11, ".mvmap.part"))) {
+                   (n > 11 && !strcmp(e->d_name + n - 11, ".mvmap.part")) ||
+                   (n > 11 && !strcmp(e->d_name + n - 11, ".mvvec.part"))) {
             char final[4096];
             struct stat st2;
             snprintf(final, sizeof(final), "%s", p);
@@ -80,26 +81,6 @@ static void recover_parts(const char *dir, int depth)
 }
 
 /* ---------------------------------------------------------------- file input: .mvmap only */
-
-static void *null_open(void *opaque, const char *path, const rc_stream_info *si)
-{
-    (void)opaque; (void)path; (void)si;
-    return (void *)1;
-}
-
-static int null_write(void *h, const rc_packet *p)
-{
-    (void)h; (void)p;
-    return 0;
-}
-
-static int null_close(void *h)
-{
-    (void)h;
-    return 0;
-}
-
-static const rc_video_ops null_ops = { null_open, null_write, null_close };
 
 /* Writes <file>.mvmap (next to the file, extension replaced) with the given settings. */
 static int analyse_file(const rc_opts *a, const char *path)
@@ -151,7 +132,7 @@ static int analyse_file(const rc_opts *a, const char *path)
     fo.max_segment = 1e300;
     fo.map = want_map;
     fo.vectors = want_vec;
-    s = f ? rcs_create(&fo, 0, &null_ops, NULL) : NULL;
+    s = f ? rcs_create(&fo, 0, &rcs_null_ops, NULL) : NULL;
     if (!s || rcs_set_map_path(s, map) < 0)
         goto end;
     rcs_set_stream(s, m.avcc, m.avcc_size, 1, (int)m.timescale, m.nal_length_size);
@@ -168,7 +149,7 @@ static int analyse_file(const rc_opts *a, const char *path)
             log_warn("%s: read error at sample %d", path, i);
             break;
         }
-        rcs_packet(s, buf, (int)p->size, p->dts, p->pts, p->key);
+        rcs_packet(s, buf, (int)p->size, p->dts, p->pts, p->key, 0);
     }
     rcs_free(s);                    /* writes the map */
     s = NULL;
@@ -221,7 +202,7 @@ static int on_au(void *opaque, const uint8_t *au, int size, int64_t ts, int key,
         r->broken++;
         log_debug("incomplete access unit (lost RTP packets) at ts %lld", (long long)ts);
     }
-    return rcs_packet(r->s, au, size, ts, ts, key);
+    return rcs_packet(r->s, au, size, ts, ts, key, broken);
 }
 
 /* one connection; returns when the stream drops or a stop is requested */
@@ -244,12 +225,14 @@ static void run_session(const rc_opts *a, const mp4_options *mo)
     c = rtsp_open(a->url, a->timeout, &stop_requested);
     if (!c)
         return;
-    r.s = rcs_create(a, 0, a->viewonly ? &null_ops : &mp4_writer_ops, (void *)mo);
+    r.s = rcs_create(a, 0, &mp4_writer_ops, (void *)mo);     /* --viewonly: the session writes nothing */
     if (!r.s)
         goto end;
     if (live)
         rcs_set_live(r.s, live, mo->fix_refs);
     sprop = rtsp_sprop(c, &sprop_len);
+    if (!sprop_len)
+        log_info("no sprop-parameter-sets in the SDP: waiting for in-band SPS/PPS");
     rcs_set_stream(r.s, sprop, sprop_len, 1, rtsp_clock_rate(c), 0);
     dp = rtp_h264_create(rtsp_payload_type(c), on_au, &r);
     if (!dp)
@@ -291,10 +274,6 @@ int main(int argc, char **argv)
     if (r < 0) {
         rc_usage(argv[0]);
         fprintf(stderr, "%s: error: %s\n", argv[0], err);
-        return 2;
-    }
-    if (strcmp(a.transport, "tcp")) {
-        fprintf(stderr, "%s: error: only --transport tcp is supported\n", argv[0]);
         return 2;
     }
     if (a.fix == FIX_REMUX) {
@@ -342,8 +321,11 @@ int main(int argc, char **argv)
         backoff = mono() - started > 60 ? 1 : (backoff * 2 > 60 ? 60 : backoff * 2);
         log_info("reconnecting in %ds", backoff);
         until = mono() + backoff;
-        while (!stop_requested && mono() < until)
+        while (!stop_requested && mono() < until) {
+            if (live)
+                live_poll(live);        /* viewers may connect or leave while the camera is away */
             usleep(100000);
+        }
     }
     log_info("stopped");
     live_close(live);

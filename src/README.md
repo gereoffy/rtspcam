@@ -61,7 +61,7 @@ python3 liveview.py --live-dir /run/rtspcam --host 0.0.0.0 --port 8781  # http:/
 ```
 
 A kapcsolók ugyanazok, mint az `rtspcam.py`-nál (`--config` JSON is megy), kivéve:
-- csak TCP (RTP a vezérlő kapcsolaton, interleaved); `--transport udp` hibát ad;
+- csak TCP (RTP a vezérlő kapcsolaton, interleaved), `--transport` kapcsoló nincs;
 - hitelesítés: az URL-ben megadott `rtsp://felhasználó:jelszó@...` alapján Basic vagy Digest (MD5, MD5-sess, qop=auth),
   amelyiket a kamera kéri; a naplóban a jelszó helyén `***` áll;
 - `--fix inline` (alapértelmezett) vagy `--fix off`; a `remux` nincs;
@@ -76,6 +76,20 @@ A kapcsolók ugyanazok, mint az `rtspcam.py`-nál (`--config` JSON is megy), kiv
 - csak `rtsp://` bemenet (fájl nincs); `--cheap` elfogadott, de nincs hatása (nincs mit kihagyni).
 Leállítás: SIGINT/SIGTERM (a nyitott felvételt lezárja). Szakadáskor újracsatlakozik (2, 4, … 60 s várakozás),
 induláskor a megmaradt `.part` fájlokat átnevezi.
+
+Üzemeltetési részletek:
+- a fájlnév a felvétel első (pre-roll) képének **faliórás** ideje (a kamera órájának csúszása, időbélyeg-ugrása nem
+  tolja el); ha a név foglalt (pl. az őszi óraátállítás ismétlődő órája), `_1`, `_2`… utótagot kap;
+- **tele lemez**: felvétel indítása előtt megnézi a szabad helyet (`--min-free MB`, alapból 100; 0 = nincs
+  ellenőrzés); ha kevesebb van, vagy a könyvtár/fájl nem hozható létre, vagy írás közben hiba jön, a rögzítő egy
+  hibasorral **view-only módba vált** (mint a `--viewonly`: elemzés, riasztás, élőkép megy, de se `.mp4`, se
+  `.mvmap`/`.mvvec` nem íródik), és abban is marad: a hely felszabadítása után a service-t újra kell indítani. A
+  félbemaradt fájlt azzal zárja le, ami kiment; ha egy teljes fragmens sem került ki, törli;
+- **diagnosztika** (egyszer naplózott figyelmeztetések): 30 s-ig nincs kulcskocka (IDR); a stream nem elemezhető
+  (B-kocka, CAVLC/Baseline, FMO, interlace, 4:2:2, vagy nincs SPS/PPS se az SDP-ben, se a streamben) – ilyenkor csak
+  `--always`-zel van felvétel; 50 egymás utáni kocka nem dekódolható; nincs `sprop-parameter-sets` az SDP-ben (info);
+- a hiányos (csomagvesztéses) képet rögzíti, de nem elemzi (a térképben „nincs adat”), hogy a szemét vektor ne
+  riasszon.
 
 Mért erőforrás (élő kamera, 60 s egymás mellett, ugyanazokkal a beállításokkal, fejlesztői gépen):
 Python 7,6% CPU / 535 MB RSS, C 1,5% CPU / 8,5 MB RSS.

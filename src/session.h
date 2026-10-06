@@ -34,12 +34,19 @@ typedef struct rc_video_ops {
 
 typedef struct rc_session rc_session;
 
-/* wall0: wall clock time of the session start (<= 0: now); used for file names */
+/* a video writer that writes nothing (file analysis: only the .mvmap is wanted) */
+extern const rc_video_ops rcs_null_ops;
+
+/* wall0: wall clock time of the session start; <= 0: file names come from the wall clock at the
+ * time a recording starts (immune to the camera's clock drift and timestamp jumps). A given
+ * wall0 (tests) names the files from wall0 + stream time instead, so that the names are
+ * reproducible. */
 rc_session *rcs_create(const rc_opts *a, double wall0, const rc_video_ops *ops, void *opaque);
 int rcs_set_stream(rc_session *s, const uint8_t *extradata, int size, int tb_num, int tb_den,
                    int nal_length_size);
-/* one access unit; data must stay valid only during the call */
-int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_t pts, int key);
+/* one access unit; data must stay valid only during the call. broken: the picture is incomplete
+ * (lost packets): it is stored but not analysed (its vectors would be garbage). */
+int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_t pts, int key, int broken);
 /* File analysis: write the whole stream as one .mvmap to `path` (no file names from the clock)
  * and analyse from the first packet on (no waiting for a key frame), so the map times are
  * the file's times. Use with --always and an infinite --max-segment. */
