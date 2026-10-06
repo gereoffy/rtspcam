@@ -45,6 +45,41 @@ FNAME = re.compile(r"^(?P<stem>.+?)(?:_(?P<hms>\d{6}))?\.mp4$")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+def has_audio(path):
+    """does the MP4 have a sound track? Walks the top-level boxes (the mdat is skipped, not read) to
+    the moov (at the start in the recorder's files, often at the end in others) and looks for a
+    handler of type 'soun' in it: a few small reads. Asked only for the recording being opened
+    (/api/audio), never for the whole listing."""
+    try:
+        with open(path, "rb") as f:
+            size = os.fstat(f.fileno()).st_size
+            pos = 0
+            while pos + 8 <= size:
+                f.seek(pos)
+                hdr = f.read(16)
+                n, typ = struct.unpack(">I4s", hdr[:8])
+                hl = 8
+                if n == 1 and len(hdr) >= 16:
+                    n, hl = struct.unpack(">Q", hdr[8:16])[0], 16
+                elif n == 0:
+                    n = size - pos
+                if n < hl:
+                    return False
+                if typ == b"moov":
+                    f.seek(pos + hl)
+                    moov = f.read(min(n - hl, 16 << 20))
+                    i = moov.find(b"hdlr")
+                    while i >= 0:
+                        if moov[i + 12:i + 16] == b"soun":   # type, version/flags, pre_defined, handler type
+                            return True
+                        i = moov.find(b"hdlr", i + 4)
+                    return False
+                pos += n
+    except (OSError, struct.error):
+        pass
+    return False
+
+
 class Library:
     def __init__(self, root):
         self.root = os.path.realpath(root)
@@ -242,6 +277,11 @@ def make_handler(lib):
                     path = self.cfg_path(q["name"][0])
                     data = open(path, "rb").read() if os.path.exists(path) else b"{}"
                     return self.send_bytes(data, "application/json")
+                if u.path == "/api/audio":       # asked for the selected recording only (not in the listing)
+                    p = lib.resolve(q["id"][0], ".mp4")
+                    if not p:
+                        return self.send_bytes(b"not found", "text/plain", 404)
+                    return self.send_bytes(json.dumps({"audio": has_audio(p)}).encode(), "application/json")
                 if u.path == "/video":
                     p = lib.resolve(q["id"][0], ".mp4")
                     if not p:
