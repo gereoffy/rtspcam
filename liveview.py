@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import queue
+import select
 import socket
 import struct
 import threading
@@ -41,6 +42,15 @@ INIT, KEY, DELTA, STATUS = 1, 2, 3, 4
 END = None                      # queue sentinel: the stream ended (or restarts), close the response
 
 
+def browser_gone(conn):
+    """the viewer closed its connection (it sends nothing while it streams: readable means EOF)"""
+    try:
+        r, _, _ = select.select([conn], [], [], 0)
+        return bool(r) and not conn.recv(1, socket.MSG_PEEK)
+    except OSError:
+        return True
+
+
 class Hub:
     """One recorder socket, shared by all viewers of that camera."""
 
@@ -52,6 +62,7 @@ class Hub:
         self.gop = []           # messages since the last key frame
         self.thread = None
         self.status = None      # (alarm, recording, time received, online); only while somebody watches
+        self.connected = False  # reading the recorder's socket: the recorder runs
 
     def subscribe(self):
         q = queue.Queue(maxsize=600)            # ~40 s of pictures; a viewer that far behind is dropped
@@ -90,10 +101,12 @@ class Hub:
                 if not self.subs:
                     self.init, self.gop = None, []
                     return
+            idle = False            # stopped because nobody watches (not because the recorder is gone)
             try:
                 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.settimeout(15)
+                s.settimeout(60)    # a status comes every 2 s, but connecting to a dead camera blocks ~10 s
                 s.connect(self.path)
+                self.connected = True
                 f = s.makefile("rb")
                 while True:
                     hdr = f.read(5)
@@ -110,6 +123,7 @@ class Hub:
                         continue
                     with self.lock:
                         if not self.subs:
+                            idle = True
                             break
                         if typ == INIT:
                             if self.init is not None:   # new stream parameters: viewers start over
@@ -129,6 +143,9 @@ class Hub:
             except OSError:
                 pass
             with self.lock:                     # the recorder is gone (restart, reconnect)
+                self.connected = False
+                if not idle:
+                    self.status = None          # its last status is no longer true
                 self.init, self.gop = None, []
                 for q in self.subs:
                     try:
@@ -168,7 +185,13 @@ class Live:
         for name, hub in self.hubs.items():
             s = hub.status
             fresh = s is not None and now - s[2] < 15   # the recorder repeats it every 2 s (also while reconnecting)
-            st[name] = {"alarm": fresh and s[0], "rec": fresh and s[1], "known": fresh, "online": fresh and s[3]}
+            if fresh:
+                st[name] = {"alarm": s[0], "rec": s[1], "known": True, "online": s[3]}
+            else:
+                # no recent status: if its socket is open the recorder runs but has no picture (it is
+                # connecting to a camera that answers slowly, or waits for a key frame); otherwise
+                # the recorder does not run
+                st[name] = {"alarm": False, "rec": False, "known": hub.connected, "online": False}
         return json.dumps(st).encode()
 
     def handle(self, h, path):
@@ -194,9 +217,13 @@ class Live:
             try:
                 while True:
                     try:
-                        data = q.get(timeout=20)
+                        data = q.get(timeout=5)
                     except queue.Empty:
-                        break                   # the recorder sends nothing (camera down?)
+                        # no picture: the camera is away. Keep the stream open while the recorder
+                        # runs (it continues when the camera is back), unless the browser left
+                        if not hub.connected or browser_gone(h.connection):
+                            break
+                        continue
                     if data is END:
                         break
                     h.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))

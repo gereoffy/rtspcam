@@ -75,7 +75,8 @@ A kapcsolók ugyanazok, mint az `rtspcam.py`-nál (`--config` JSON is megy), kiv
 - új: `--max-ref-dist N` (alapértelmezett 1): csak azokat a kockákat elemzi, amelyek referenciája legfeljebb N kockával
   korábbi; 0 = mindet (mint az `rtspcam.py`). Lásd lent: „Hierarchikus P-kockák”.
 - csak `rtsp://` bemenet (fájl nincs); `--cheap` elfogadott, de nincs hatása (nincs mit kihagyni).
-Leállítás: SIGINT/SIGTERM (a nyitott felvételt lezárja). Szakadáskor újracsatlakozik (2, 4, … 60 s várakozás),
+Leállítás: SIGINT/SIGTERM (a nyitott felvételt lezárja). Szakadáskor újracsatlakozik (2, 4, … 60 s várakozás);
+akkor is, ha a kapcsolat él, de `--timeout` ideig (10 s) nem jön videó (lefagyott kamera, ami csak RTCP-t küld);
 induláskor a megmaradt `.part` fájlokat átnevezi.
 
 Üzemeltetési részletek:

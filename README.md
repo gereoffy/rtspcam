@@ -59,8 +59,8 @@ következő felvétele indul. A kép és az idővonal elfér az ablak magasság�
 ## Élőkép (`/live`)
 A lejátszó fejlécében az `● Élő` gomb ide visz (mindig az összes kamerához). A rács a kamerákat egymás mellett mutatja (9 kameránál 3×3), a böngésző maga
 dekódolja a H.264-et (Media Source Extensions), a szerver nem kódol át. A kamerák **piros kerete** riasztást, a **narancs** a riasztás utáni (post-roll)
-rögzítést jelzi; a **szürkített kép** „kamera nem elérhető” felirattal azt, hogy a rögzítő nem éri el a kamerát (az utolsó képek
-maradnak a csempén), „nem fut a rögzítő” felirattal pedig azt, hogy annak a kamerának a rögzítője nem jelentkezik. A csempe fölé víve megjelenik egy sáv (a képen alapból nincs felirat): balra a kamera neve, mellette az állapot (felbontás, fps, késés,
+rögzítést jelzi; a **szürkített kép** „kamera nem elérhető” felirattal azt, hogy a rögzítő nem éri el a kamerát, vagy a kamera nem küld képet (az utolsó képek
+maradnak a csempén), „nem fut a rögzítő” felirattal pedig azt, hogy annak a kamerának a rögzítője nem fut (a socketje nem érhető el). A csempe fölé víve megjelenik egy sáv (a képen alapból nincs felirat): balra a kamera neve, mellette az állapot (felbontás, fps, késés,
 újracsatlakozások), jobbra a **▶ Felvételek** gomb, ami a kamera lejátszó-oldalára (`/player/<kamera>`) visz. A képre kattintva egy kamera nagyban látszik
 (újabb kattintás: vissza a rácsba); ilyenkor **görgővel** az egérkurzornál nagyítható (max. 12×), húzással mozgatható, nagyítva egy kattintás 1×-re állít vissza.
 Ha nem fut a rögzítő (nincs socket, vagy nem jelentkezik), az oldal „Hiba: nem fut a rögzítő" üzenetet ír.

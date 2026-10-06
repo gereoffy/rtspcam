@@ -38,6 +38,7 @@ struct rtsp_client {
     int session_timeout;
     int use_get_parameter;
     double last_keepalive;
+    double last_video;      /* last video RTP packet (a camera may keep the connection with RTCP only) */
 
     char *video_control;
     char *session_control;
@@ -825,7 +826,7 @@ rtsp_client *rtsp_open(const char *url, double timeout, volatile int *stop)
     if (!play_url || request(c, "PLAY", play_url, "Range: npt=0.000-\r\n", &r) < 0)
         goto fail;
     free_response(&r);
-    c->last_keepalive = mono();
+    c->last_keepalive = c->last_video = mono();
     free(setup_url);
     free(play_url);
     log_info("connected: %s (payload %d, %d Hz, session timeout %d s)", c->url, c->payload_type,
@@ -858,6 +859,11 @@ int rtsp_read_rtp(rtsp_client *c, const uint8_t **pkt, volatile int *stop)
 {
     for (;;) {
         int r;
+        if (mono() - c->last_video > c->timeout) {
+            /* the connection lives (RTCP, keepalive answers) but no picture comes: a hung camera */
+            log_warn("no video for %.0f s", c->timeout);
+            return -1;
+        }
         keepalive(c);
         r = fill(c, 4, stop);
         if (r)
@@ -872,6 +878,7 @@ int rtsp_read_rtp(rtsp_client *c, const uint8_t **pkt, volatile int *stop)
             c->packets[ch & 3]++;
             c->in_resync = 0;
             if (ch == c->rtp_channel && n >= 12) {
+                c->last_video = mono();
                 *pkt = c->rbuf + c->rpos - n;
                 return (int)n;
             }
