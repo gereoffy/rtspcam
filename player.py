@@ -49,6 +49,15 @@ FNAME = re.compile(r"^(?P<stem>.+?)(?:_(?P<hms>\d{6}))?\.mp4$")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+def cfg_path(camera):
+    """configs/<camera>.json, the name as it is (accents, hyphens...): only what could lead out of the
+    directory (path separators, a leading dot as in "..") and white space become "_" """
+    name = re.sub(r"[/\\\x00\s]", "_", camera)
+    if not name or name.startswith("."):
+        name = "_" + name
+    return os.path.join(CONFIG_DIR, name + ".json")
+
+
 def has_audio(path):
     """does the MP4 have a sound track? Walks the top-level boxes (the mdat is skipped, not read) to
     the moov (at the start in the recorder's files, often at the end in others) and looks for a
@@ -181,7 +190,7 @@ class Library:
         with GENVEC_LOCKS.setdefault(mp4, threading.Lock()), GENVEC_SLOTS:
             if os.path.exists(vec):                      # made meanwhile by another request
                 return vec
-            cfg = os.path.join(CONFIG_DIR, re.sub(r"[^A-Za-z0-9_.-]", "_", os.path.relpath(mp4, self.root).split(os.sep)[0]) + ".json")
+            cfg = cfg_path(os.path.relpath(mp4, self.root).split(os.sep)[0])
             runs = ([[RTSPCAM, "--config", cfg, "--vectors", mp4]] if os.path.exists(cfg) else []) + [[RTSPCAM, "--vectors", mp4]]
             out = ""
             for cmd in runs:
@@ -223,7 +232,7 @@ def make_handler(lib):
             self.wfile.write(data)
 
         def cfg_path(self, name):
-            return os.path.join(CONFIG_DIR, re.sub(r"[^A-Za-z0-9_.-]", "_", name) + ".json")
+            return cfg_path(name)
 
         def do_POST(self):
             u = urlparse(self.path)
