@@ -31,10 +31,10 @@ Kapcsolók:
 | `--config-dir` | a hangoló `<kamera>.json` konfigjainak mappája (alapból `configs/`) |
 | `--live-dir` | a rögzítők `--live` könyvtára: az élőkép (`/live`, `/status`) is a lejátszóból szolgálódik ki |
 | `--cameras a,b,c` | `--live-dir`-rel: a kamerák sorrendje az élőkép rácsában (alapból a socketek ábécésorrendje) |
+| `--rtspcam` | a rögzítő binárisa (alapból `src/rtspcam`): a hangolás ezzel generálja a hiányzó `.mvvec`-et |
 
 A `player.py` mellett kell lennie a `player.html`, `index.html`, `liveview.html`, `liveview.py`, `mvmap.py` és `favicon.ico` fájloknak. Az oldalakat
-minden kérésnél újraolvassa (módosítás után nem kell újraindítani), és `no-cache` fejlécet kapnak. A `.mvmap` és `.mvvec` fájlokat a lejátszó csak
-akkor használja, ha léteznek; nélkülük is lejátszik (overlay nélkül).
+minden kérésnél újraolvassa (módosítás után nem kell újraindítani), és `no-cache` fejlécet kapnak. A `.mvvec`-et a lejátszó csak akkor kéri, ha vektor-overlayt vagy hangolást használsz. Ha a felvételhez nincs, a **szerver** az első kérésnél legenerálja: lefuttatja a `src/rtspcam --vectors FILE.mp4`-et (csak a hiányzó `.mvvec`-et írja, a `.mvmap`-et nem bántja; kb. 0,3 s egy 20 s-os 2K-s felvételre), a kamera `configs/<kamera>.json` fájljával (a `max_ref_dist` miatt). A felvételek könyvtárának írhatónak kell lennie. Egy fájlra egyszerre egy, összesen legfeljebb két generálás fut. A `.mvmap` nélkül a felvétel overlay nélkül is lejátszható.
 
 Hitelesítés nincs: alapból csak `127.0.0.1`-en figyel; `--host 0.0.0.0` csak megbízható hálón. Javasolt VPN vagy reverse proxy (nginx stb) használata.
 A `/player/<kamera>` csak a listát szűri, nem korlátozza a hozzáférést.

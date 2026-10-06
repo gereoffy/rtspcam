@@ -67,6 +67,7 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
 #tl.tuning{outline:2px solid #ffd23f}
 #sz{touch-action:none;width:100%;height:90px;display:block;margin-top:4px;border-radius:4px;background:#101216;cursor:pointer}
 #drawz.on{background:#ffd23f;color:#201800;border-color:#ffd23f}
+#mute.on{background:var(--acc);color:#04121f;border-color:var(--acc)}
 .wrap.drawing{cursor:crosshair}
 @media(max-width:1250px){#tunepanel .tp-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:760px){#tunepanel .tp-grid{grid-template-columns:1fr}}
@@ -100,7 +101,7 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
     <div class="wrap" id="wrap" style="aspect-ratio:4/3" title="Görgő: nagyítás az egérkurzornál · húzás: mozgatás · dupla kattintás: visszaállítás">
       <div id="zoomind"></div>
       <div id="modebadge"></div>
-      <video id="v" playsinline preload="auto"></video>
+      <video id="v" playsinline preload="auto" muted></video>
       <canvas id="ov"></canvas>
       <div id="msg">Válassz egy felvételt a listából.</div>
     </div>
@@ -118,6 +119,8 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
       <button id="play" style="min-width:90px">▶ Lejátszás</button>
       <button id="prev" title="előző kocka (←)">◀ kocka</button><button id="next" title="következő kocka (→)">kocka ▶</button>
       <select id="speed" title="sebesség"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
+      <button id="mute" title="hang be/ki (M)" style="display:none">🔇 Néma</button>
+      <select id="gain" style="display:none" title="hangerősítés halk felvételekhez (csak lejátszáskor, a fájl nem változik; a hangos részeket egy limiter fogja vissza)"><option value="1">hang 1×</option><option value="2">hang 2×</option><option value="4">hang 4×</option><option value="8">hang 8×</option><option value="16">hang 16×</option></select>
       <span class="seg" title="mi alapján látszik az idővonal és a kockák"><button id="recbtn" class="on" title="az idővonal és a kockák a rögzítő által írt .mvmap-ből">Rögzítő (.mvmap)</button><button id="tunebtn" title="a riasztási paraméterek hangolása a .mvvec-ből, csúszkákkal (a .mvmap-et ilyenkor nem használja)">⚙ Hangolás (.mvvec)</button></span>
     </div>
     <div class="row vrow"><span id="hud"></span></div>
@@ -290,14 +293,18 @@ async function select(it, setHash) {
   $('msg').textContent = 'Betöltés… (az első megnyitásnál a fájl előkészítése pár másodperc)'; $('msg').style.display = 'flex';
   v.pause(); curFrame = -1; loading = true; dirty = true;
   vecs = null; vecLoading = false; vecError = false; follow = null; followSig = '';
-  for (const o of $('ovmode').options) o.disabled = o.value !== 'cells' && !it.has_vec;
-  if (tuneOn && !it.has_vec) tuneClose('nincs .mvvec ehhez a felvételhez – a hangolás ki van kapcsolva');
   if ($('ovmode').value !== 'cells' || tuneOn) loadVec(it);
-  $('modebadge').textContent = tuneOn ? 'HANGOLÁS · .mvvec + csúszkák' : 'rögzítő · .mvmap'; $('tunebtn').disabled = !it.has_vec; $('tunebtn').title = it.has_vec ? 'a riasztási paraméterek hangolása a .mvvec-ből, csúszkákkal (a .mvmap-et ilyenkor nem használja)' : 'ehhez a felvételhez nincs .mvvec (c/rtspcam --vectors)';
+  // sound controls only with a sound track (asked for this recording alone; hidden until the answer)
+  $('mute').style.display = $('gain').style.display = 'none'; curAudio = false;
+  fetch('/api/audio?id=' + encodeURIComponent(it.id)).then(r => r.json()).then(a => {
+    if (cur !== it || !a.audio) return;
+    curAudio = true; $('mute').style.display = $('gain').style.display = '';
+  }).catch(() => {});
+  $('modebadge').textContent = tuneOn ? 'HANGOLÁS · .mvvec + csúszkák' : 'rögzítő · .mvmap'; $('tunebtn').disabled = false; $('tunebtn').title = 'a riasztási paraméterek hangolása a .mvvec-ből, csúszkákkal (a .mvmap-et ilyenkor nem használja); ha a felvételhez nincs .mvvec, a szerver legenerálja';
   await loadMap(it);
   v.src = '/video?id=' + encodeURIComponent(it.id);
   v.playbackRate = +$('speed').value;
-  const notes = [it.has_map ? '' : 'nincs .mvmap – overlay nélkül', it.has_vec ? '' : 'nincs .mvvec – a hangolás ehhez nem elérhető'].filter(Boolean).join(' · ');
+  const notes = [it.has_map ? '' : 'nincs .mvmap – overlay nélkül'].filter(Boolean).join(' · ');
   $('info').textContent = notes; $('inforow').style.display = notes ? '' : 'none';
   dirty = true;
   try { await v.play(); } catch (e) {}
@@ -310,6 +317,33 @@ v.addEventListener('pause', () => $('play').textContent = '▶ Lejátszás');
 v.addEventListener('ended', () => { if (!$('auto').checked || !cur) return;
   const nxt = shown.filter(i => i.camera === cur.camera && i.ts > cur.ts).sort((a,b) => a.ts - b.ts)[0]; if (nxt) select(nxt, true); });
 $('play').onclick = () => { if (!cur) return; if (v.ended) v.currentTime = 0; v.paused ? v.play() : v.pause(); };
+// sound: muted on every page load; the button (or M) switches it
+var curAudio = false;                               // the selected recording has a sound track (/api/audio)
+v.muted = true;
+const muteUI = () => { $('mute').textContent = v.muted ? '🔇 Néma' : '🔊 Hang'; $('mute').classList.toggle('on', !v.muted); };
+$('mute').onclick = () => { v.muted = !v.muted; muteUI(); if (!v.muted) audioGain(); };
+v.addEventListener('volumechange', muteUI);
+muteUI();
+// amplification for quiet recordings: <video> -> gain -> limiter -> speakers (Web Audio). The graph is made at
+// the first use (browsers allow an AudioContext only after a click); from then on all sound goes through it.
+let actx = null, gnode = null;
+function audioGain() {
+  const g = +$('gain').value;
+  if (!actx && g === 1) return;                     // 1x needs no graph
+  try {
+    if (!actx) {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      gnode = actx.createGain();
+      const lim = actx.createDynamicsCompressor();    // keeps the amplified loud parts from clipping
+      lim.threshold.value = -3; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.003; lim.release.value = 0.25;
+      actx.createMediaElementSource(v).connect(gnode); gnode.connect(lim); lim.connect(actx.destination);
+    }
+    if (actx.state === 'suspended') actx.resume();
+    gnode.gain.value = g;
+  } catch (e) { console.warn('audio gain', e); }
+}
+try { const g = localStorage.getItem('rc_gain'); if (g && [...$('gain').options].some(o => o.value === g)) $('gain').value = g; } catch (e) {}
+$('gain').addEventListener('change', () => { try { localStorage.setItem('rc_gain', $('gain').value); } catch (e) {} audioGain(); });
 // ---- zoom (wheel, at the cursor) and pan (drag); double click resets ----
 const ZMAX = 12;
 let zoom = 1, panX = 0, panY = 0, suppressClick = false;
@@ -431,7 +465,8 @@ function stepFrame(d) {
 }
 $('prev').onclick = () => stepFrame(-1); $('next').onclick = () => stepFrame(1);
 addEventListener('keydown', e => { if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.code === 'ArrowLeft') { e.preventDefault(); stepFrame(e.shiftKey ? -10 : -1); } else if (e.code === 'ArrowRight') { e.preventDefault(); stepFrame(e.shiftKey ? 10 : 1); } });
+  if (e.code === 'ArrowLeft') { e.preventDefault(); stepFrame(e.shiftKey ? -10 : -1); } else if (e.code === 'ArrowRight') { e.preventDefault(); stepFrame(e.shiftKey ? 10 : 1); }
+  else if (e.code === 'KeyM' && curAudio) $('mute').click(); });
 // The length comes from the data (map; else the list's value that the server read from the map/container), not from the <video>: while a fragmented MP4 is
 // still downloading (slow link, e.g. an SSH tunnel) Firefox reports only the length of what it has parsed so far, which grows - the timeline would rescale.
 const dur = () => vdur || (cur && cur.duration) || (isFinite(v.duration) && v.duration > 0 ? v.duration : 0);
@@ -455,12 +490,14 @@ function fit(c) { const r = c.getBoundingClientRect(), d = devicePixelRatio || 1
 // ---- motion field (.mvvec): one byte per 16x16 cell, low 4 bits = length in px, high 4 bits = direction in 22.5 degree steps ----
 let vecs = null, vecLoading = false, vecError = false;
 const VEC_SCALE = 2;      // line length in video pixels per pixel of vector length
-const effMode = () => { const m = $('ovmode').value; return (m !== 'cells' && !(cur && cur.has_vec)) ? 'cells' : m; };   // no .mvvec: fall back to the cells
+const effMode = () => $('ovmode').value;
 async function loadVec(it) {
-  if (!it.has_vec || vecLoading) return;
+  if (vecLoading) return;
   vecs = null; vecError = false; vecLoading = true; dirty = true; const id = it.id;
   try {
-    const hd = await (await fetch('/api/vecinfo?id=' + encodeURIComponent(id))).json();
+    // (a recording without .mvvec gets it made by the server on this first request, ~0.3 s)
+    const hr = await fetch('/api/vecinfo?id=' + encodeURIComponent(id)); if (!hr.ok) throw new Error((await hr.text()).slice(0, 200) || 'HTTP ' + hr.status);
+    const hd = await hr.json();
     const r = await fetch('/api/vec?id=' + encodeURIComponent(id)); if (!r.ok) throw new Error('HTTP ' + r.status);
     const buf = new Uint8Array(await r.arrayBuffer()), dv = new DataView(buf.buffer), n = hd.gw * hd.gh, t = [], has = [], offs = [], fbytes = [], vbytes = [];
     // record: u32 t_ms, u8 has_grid, u32 frame_bytes, u32 vcl_bytes, then gw*gh bytes if has_grid (format 2 only)
@@ -468,7 +505,7 @@ async function loadVec(it) {
     for (let p = 0; p + rh <= buf.length; ) { const g = buf[p + 4], end = p + rh + (g ? n : 0); if (end > buf.length) break;
       t.push(dv.getUint32(p, true)); has.push(g); offs.push(p + rh); fbytes.push(dv.getUint32(p + 5, true)); vbytes.push(dv.getUint32(p + 9, true)); p = end; }
     if (cur && cur.id === id) vecs = {t, has, offs, buf, gw: hd.gw, gh: hd.gh, w: hd.w, h: hd.h, fbytes, vbytes};
-  } catch (e) { vecs = null; vecError = true; }
+  } catch (e) { vecs = null; vecError = e.message || true; }
   vecLoading = false; dirty = true;
   if (tuneOn && vecs) tuneRecompute(1);
 }
@@ -516,7 +553,7 @@ function drawOverlay() {
   }
   drawVectors();
   const t = v.currentTime, T = dur();
-  const vst = $('ovmode').value === 'cells' ? '' : vecLoading ? ' · vektorok betöltése…' : (cur && !cur.has_vec) ? ' · nincs .mvvec ehhez a felvételhez' : vecError ? ' · a vektorok nem tölthetők be' : '';
+  const vst = $('ovmode').value === 'cells' ? '' : vecLoading ? ' · vektorok betöltése…' : vecError ? ' · a vektorok nem tölthetők be' + (typeof vecError === 'string' ? ': ' + vecError : '') : '';
   $('hud').innerHTML = `${hudName()}${fmtClock(t)} / ${fmtClock(T)} · kocka ${curFrame + 1}/${tms.length}${vst}` + (flags & 4 ? ' · <span style="color:var(--rec);font-weight:700">⚑ riasztás</span>' : '') + (flags & 2 ? ' · mozgás' : '');
 }
 const fmtClock = s => { s = Math.max(0, s || 0); return Math.floor(s/60) + ':' + (s % 60).toFixed(1).padStart(4, '0'); };
@@ -654,7 +691,7 @@ function drawTuneTimeline() {
 function drawOverlayTune() {
   fit(ov); octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, ov.width, ov.height);
   if (loading) { $('hud').innerHTML = hudNameOnly(); return; }
-  if (!vecs || !tA) { $('hud').innerHTML = hudName() + (vecLoading ? 'vektorok betöltése…' : (vecError ? 'a vektorok nem tölthetők be' : '')); return; }
+  if (!vecs || !tA) { $('hud').innerHTML = hudName() + (vecLoading ? 'vektorok betöltése…' : (vecError ? 'a vektorok nem tölthetők be' + (typeof vecError === 'string' ? ': ' + vecError : '') : '')); return; }
   const i0 = idxIn(vecs.t, vt()); let i = i0; for (let k = 0; k < 8 && i > 0 && !vecs.has[i]; k++) i--;
   curFrame = i0;
   const W = ov.width, H = ov.height, s = Math.min(W / vecs.w, H / vecs.h), ox = (W - vecs.w * s) / 2, oy = (H - vecs.h * s) / 2, dpr = devicePixelRatio || 1;
@@ -684,7 +721,7 @@ function tuneMode(on) {
   const b = $('modebadge'); b.classList.toggle('tune', on); b.textContent = on ? 'HANGOLÁS · .mvvec + csúszkák' : 'rögzítő · .mvmap';
 }
 function tuneOpen() {
-  if (!cur || !cur.has_vec) return;
+  if (!cur) return;
   tuneOn = true; $('tunepanel').style.display = 'block'; tuneMode(true); if (!$('tname').value) $('tname').value = cur.camera;
   if (!vecs) loadVec(cur); else tuneRecompute(1);
   tuneLoadConfig(false); dirty = true;
@@ -780,7 +817,7 @@ function loop() {
 ['showov', 'onlybest'].forEach(id => $(id).addEventListener('change', () => dirty = true));
 try { const m = localStorage.getItem('rc_ovmode'); if (m && [...$('ovmode').options].some(o => o.value === m)) $('ovmode').value = m; } catch (e) {}
 $('ovmode').addEventListener('change', () => { try { localStorage.setItem('rc_ovmode', $('ovmode').value); } catch (e) {}
-  if ($('ovmode').value !== 'cells' && cur && cur.has_vec && !vecs && !vecLoading) loadVec(cur); dirty = true; });
+  if ($('ovmode').value !== 'cells' && cur && !vecs && !vecLoading) loadVec(cur); dirty = true; });
 new ResizeObserver(() => applyZoom()).observe($('wrap'));
 loadList().then(loop);
 </script>

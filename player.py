@@ -16,6 +16,7 @@ import json
 import os
 import re
 import struct
+import subprocess
 import threading
 import time
 from datetime import datetime
@@ -37,6 +38,9 @@ except ImportError:
 import mvmap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+RTSPCAM = os.path.join(HERE, "src", "rtspcam")        # the recorder binary: file mode writes the missing .mvvec of a recording (--rtspcam)
+GENVEC_LOCKS = {}                                 # one generation per file at a time
+GENVEC_SLOTS = threading.Semaphore(2)             # and at most two at once (it is CPU work)
 LIVE = None                                       # liveview.Live when --live-dir is given
 CONFIG_DIR = os.path.join(HERE, "configs")        # the tuning panel saves/loads configs/<camera>.json here (see --config-dir)
 TUNE_KEYS = ("mv_min", "min_cluster", "global_limit", "window", "trigger_frames", "pre_roll", "post_roll", "ignore")
@@ -165,6 +169,28 @@ class Library:
             self.meta = {k: v for k, v in self.meta.items() if k in seen}      # forget deleted recordings
         return items
 
+    def ensure_vec(self, mp4):
+        """path of the recording's .mvvec; a missing one is made first: `rtspcam --vectors FILE.mp4` (file mode) writes only the missing sidecar, never touches an
+        existing .mvmap/.mvvec, takes ~0.3 s for 20 s of 2K video. The vectors do not depend on the detection parameters, only on --max-ref-dist, so the
+        camera's config (configs/<camera>.json) is passed first, a plain run if that fails. One run per file at a time, at most two at once."""
+        vec = mp4[:-4] + ".mvvec"
+        if os.path.exists(vec):
+            return vec
+        if not (RTSPCAM and os.access(RTSPCAM, os.X_OK)):
+            raise RuntimeError("no .mvvec, and the recorder binary was not found to make it: %s (--rtspcam)" % RTSPCAM)
+        with GENVEC_LOCKS.setdefault(mp4, threading.Lock()), GENVEC_SLOTS:
+            if os.path.exists(vec):                      # made meanwhile by another request
+                return vec
+            cfg = os.path.join(CONFIG_DIR, re.sub(r"[^A-Za-z0-9_.-]", "_", os.path.relpath(mp4, self.root).split(os.sep)[0]) + ".json")
+            runs = ([[RTSPCAM, "--config", cfg, "--vectors", mp4]] if os.path.exists(cfg) else []) + [[RTSPCAM, "--vectors", mp4]]
+            out = ""
+            for cmd in runs:
+                r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=600)
+                out = r.stdout.decode("utf-8", "replace")[-400:]
+                if r.returncode == 0 and os.path.exists(vec):
+                    return vec
+            raise RuntimeError("rtspcam --vectors failed: " + out)
+
     def warm_up(self):
         """build the whole index once in the background at start-up, so the first page load does not have to"""
         t = time.time()
@@ -262,9 +288,10 @@ def make_handler(lib):
                 if u.path in ("/api/vecinfo", "/api/vec"):
                     # .mvvec motion field: 3 MB per 10 s once unpacked (more than the video!), so it travels as the
                     # file's own zlib stream with Content-Encoding: deflate and the browser unpacks it natively
-                    p = lib.resolve(q["id"][0], ".mvvec")
-                    if not p:
-                        return self.send_bytes(b"no vectors", "text/plain", 404)
+                    mp4 = lib.resolve(q["id"][0], ".mp4")
+                    if not mp4:
+                        return self.send_bytes(b"not found", "text/plain", 404)
+                    p = lib.ensure_vec(mp4)                # a recording without .mvvec gets it made here, on first use
                     with open(p, "rb") as fh:
                         raw = fh.read()
                     if raw[:8] != mvmap.MAGIC_VEC:
@@ -326,19 +353,22 @@ def make_handler(lib):
 
 
 def main():
-    global CONFIG_DIR, LIVE
+    global CONFIG_DIR, LIVE, RTSPCAM
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", help="recordings root (the -o directory of the recorder)")
     ap.add_argument("--port", type=int, default=8780)
     ap.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to reach it from other machines "
                                                           "(there is no authentication!)")
     ap.add_argument("--config-dir", default=CONFIG_DIR, help="where the tuning panel reads/writes <camera>.json")
+    ap.add_argument("--rtspcam", default=RTSPCAM, help="the recorder binary; a recording that has no .mvvec when the tuning/vector view asks for it "
+                                                       "gets it made with `rtspcam --vectors FILE.mp4` (default: src/rtspcam)")
     ap.add_argument("--live-dir", help="the --live directory of the C recorders: serves the live view too (/live, /status), "
                                        "the same one liveview.py serves on its own")
     ap.add_argument("--cameras", help="with --live-dir: comma separated order of the cameras in the live grid "
                                       "(default: the sockets, sorted)")
     a = ap.parse_args()
     CONFIG_DIR = a.config_dir
+    RTSPCAM = a.rtspcam
     if a.cameras and not a.live_dir:
         ap.error("--cameras needs --live-dir")
     if a.live_dir:
