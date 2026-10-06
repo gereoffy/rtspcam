@@ -3,3 +3,4 @@ Authors:
 Arpad Gereoffy - idea, specification, live testing
 Claude.AI Sonnet 5.5 - original motion detection implementation, player webservice in python
 Claude.AI Opus 5.5 - rtspcam.py (PoC) rewritten in plain C, reusing/reimplementing h264 parts of ffmpeg
+Claude.AI Fable 5.1 - code review and fixes
