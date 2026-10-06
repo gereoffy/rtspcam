@@ -314,7 +314,7 @@ int main(int argc, char **argv)
     }
 
     while (!stop_requested) {
-        double started = mono(), until;
+        double started = mono(), until, next_status = 0;
         run_session(&a, &mo);
         if (stop_requested)
             break;
@@ -322,8 +322,15 @@ int main(int argc, char **argv)
         log_info("reconnecting in %ds", backoff);
         until = mono() + backoff;
         while (!stop_requested && mono() < until) {
-            if (live)
+            if (live) {
+                /* the viewers see stale pictures: tell them the camera is offline (repeated
+                 * every 2 s like the normal status, so that the state stays fresh) */
+                if (mono() >= next_status) {
+                    live_send_status(live, 0, 0, 0);
+                    next_status = mono() + 2;
+                }
                 live_poll(live);        /* viewers may connect or leave while the camera is away */
+            }
             usleep(100000);
         }
     }

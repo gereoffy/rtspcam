@@ -29,6 +29,13 @@
          color: #ffb4a8; padding: 14px 22px; border-radius: 8px; font-size: 16px; text-align: center; display: none; z-index: 5; }
   .tile.recording { outline: 4px solid #ff9f1a; outline-offset: -4px; }   /* recording after the alarm (post-roll) */
   .tile.alarm { outline: 4px solid #ff3b30; outline-offset: -4px; }
+  /* the recorder cannot reach the camera (its last pictures stay, greyed), or the recorder itself is gone */
+  .tile.offline video, .tile.norec video { filter: grayscale(1) brightness(.45); }
+  .tile.offline::after, .tile.norec::after { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+         background: rgba(0,0,0,.7); border: 1px solid var(--muted); color: #ddd; padding: 6px 14px; border-radius: 6px;
+         font-size: 15px; white-space: nowrap; pointer-events: none; z-index: 1; }
+  .tile.offline::after { content: 'kamera nem elérhető'; }
+  .tile.norec::after { content: 'nem fut a rögzítő'; }
 </style></head><body>
 <div id="grid"></div>
 <div id="err"></div>
@@ -216,6 +223,8 @@ setInterval(async () => {
       const s = st[t.name] || {};
       t.el.classList.toggle('alarm', !!s.alarm);
       t.el.classList.toggle('recording', !!s.rec);
+      t.el.classList.toggle('offline', !!s.known && !s.online);         // the recorder runs, the camera is away
+      t.el.classList.toggle('norec', !s.known && Date.now() - t0 > 12000); // no recorder reports for this camera
     }
     // no recorder has reported for a while and no tile shows a picture: the recorders are not running
     const none = tiles.length && !tiles.some(t => (st[t.name] || {}).known) && !tiles.some(t => !t.el.classList.contains('nopic'));

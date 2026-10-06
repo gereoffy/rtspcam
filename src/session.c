@@ -741,7 +741,7 @@ int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_
         s->live_alarm = s->moving_now;
         s->live_rec = s->writer != NULL;
         s->live_status_ts = ts;
-        live_send_status(s->live, s->live_alarm, s->live_rec);
+        live_send_status(s->live, s->live_alarm, s->live_rec, 1);
     }
 
     /* --- recording state machine --- */

@@ -31,7 +31,7 @@ struct live_srv {
     bytebuf init;                   /* framed init message */
     bytebuf gop;                    /* framed messages since the last key frame */
     int gop_ok;                     /* the cache holds a whole GOP from its key frame */
-    uint8_t status[2];              /* last status: alarm, recording */
+    uint8_t status[3];              /* last status: alarm, recording, online */
     int have_status;
     client c[MAX_CLIENTS];
     int n;
@@ -129,17 +129,17 @@ void live_send_frame(live_srv *l, const uint8_t *frag, size_t len, int key)
     }
 }
 
-void live_send_status(live_srv *l, int alarm, int recording)
+void live_send_status(live_srv *l, int alarm, int recording, int online)
 {
-    uint8_t msg[7];
+    uint8_t msg[8];
     l->status[0] = alarm ? 1 : 0;
     l->status[1] = recording ? 1 : 0;
+    l->status[2] = online ? 1 : 0;
     l->have_status = 1;
     msg[0] = 4;
     msg[1] = msg[2] = msg[3] = 0;
-    msg[4] = 2;
-    msg[5] = l->status[0];
-    msg[6] = l->status[1];
+    msg[4] = 3;
+    memcpy(msg + 5, l->status, 3);
     queue_all(l, msg, sizeof(msg));
 }
 
@@ -178,7 +178,7 @@ void live_poll(live_srv *l)
                 bb_put(&l->c[l->n].q, l->gop.d, l->gop.len);
         }
         if (l->have_status)
-            put_msg(&l->c[l->n].q, 4, l->status, 2);
+            put_msg(&l->c[l->n].q, 4, l->status, 3);
         log_info("live viewer %d connected", fd);
         l->n++;
     }

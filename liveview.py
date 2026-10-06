@@ -11,8 +11,9 @@ stream to every viewer (GET /live/<camera>); a viewer that cannot keep up is dro
 page shows the cameras in a grid (3x3 for 9 cameras); a click shows one camera large. The
 browser decodes the H.264 itself (Media Source Extensions): no decoding or re-encoding here.
 A red frame marks a camera in alarm (its motion detector triggered), an orange one a recording
-that still runs after the alarm (post-roll); GET /status, polled by the page every second (the
-recorders send the state every 2 s). Resolution, fps and latency are in the tile's tooltip.
+that still runs after the alarm (post-roll), a grey "camera unreachable" overlay a camera the
+recorder cannot reach (its last pictures stay on the tile); GET /status, polled by the page
+every second (the recorders send the state every 2 s, also while the camera is away). Resolution, fps and latency are in the tile's tooltip.
 Pages (next to this script, read on every request): / is index.html (info/menu),
 /live is liveview.html (the grid). The same live view can run inside player.py (--live-dir DIR there):
 class Live is the shared part (/status, /live, /live/<camera>).
@@ -50,7 +51,7 @@ class Hub:
         self.init = None
         self.gop = []           # messages since the last key frame
         self.thread = None
-        self.status = None      # (alarm, recording, time received); only while somebody watches
+        self.status = None      # (alarm, recording, time received, online); only while somebody watches
 
     def subscribe(self):
         q = queue.Queue(maxsize=600)            # ~40 s of pictures; a viewer that far behind is dropped
@@ -103,8 +104,9 @@ class Hub:
                     if len(data) < n:
                         break
                     if typ == STATUS:                   # not video: kept for /status
-                        if len(data) >= 2:
-                            self.status = (bool(data[0]), bool(data[1]), time.time())
+                        if len(data) >= 2:              # older recorders send 2 bytes (no online flag)
+                            online = data[2] != 0 if len(data) >= 3 else True
+                            self.status = (bool(data[0]), bool(data[1]), time.time(), online)
                         continue
                     with self.lock:
                         if not self.subs:
@@ -165,8 +167,8 @@ class Live:
         st = {}
         for name, hub in self.hubs.items():
             s = hub.status
-            fresh = s is not None and now - s[2] < 10   # the recorder repeats it every 2 s
-            st[name] = {"alarm": fresh and s[0], "rec": fresh and s[1], "known": fresh}
+            fresh = s is not None and now - s[2] < 15   # the recorder repeats it every 2 s (also while reconnecting)
+            st[name] = {"alarm": fresh and s[0], "rec": fresh and s[1], "known": fresh, "online": fresh and s[3]}
         return json.dumps(st).encode()
 
     def handle(self, h, path):
