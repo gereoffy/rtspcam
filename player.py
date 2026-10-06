@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-"""player.py - web player for the recordings made by rtspcam.py.
+"""player.py - web player (and, with --live-dir, live view) for the recordings made by the C recorder (src/rtspcam).
 
-    player.py /srv/cameras            # root = the -o directory of rtspcam.py
-    player.py ./rec --port 8780
+    player.py /srv/cameras            # root = the -o directory of the recorder
+    player.py ./rec --port 8780 --live-dir /run/rtspcam [--cameras a,b,c]
 
-Lists the recordings of all cameras (filter by camera / date / time of day), streams the
-full-resolution H.264 file to the browser and draws the motion map (.mvmap) over it.
-rtspcam.py already writes browser-ready files (SPS fix, see h264fix.py), so by default the player
-serves the recordings exactly as they are (`--video direct`); it needs nothing but the standard
-library and numpy (PyAV only if a recording has no .mvmap and its length must be read from the
-container). Recordings made without the fix (older versions of rtspcam.py, `--fix off`) ghost in
-browsers; opt-in conversions with a cache in player_cache/: `--video patch` (lossless SPS fix),
-`--video transcode` (re-encode, slow), `--video copy` (plain remux). PyAV is required for those.
+Pages: / (index.html), /player and /player/<camera> (the player), /live (live view, with --live-dir).
+Lists the recordings of all cameras (filter by period / camera / date / time of day), streams the
+full-resolution H.264 files to the browser exactly as they are (the recorder writes browser-ready files)
+and draws the motion map (.mvmap) / vectors (.mvvec) over them; tuning mode works from the .mvvec.
+Standard library only; PyAV is used only to read the length of a recording that has no .mvmap.
 """
 import argparse
 import gzip
-import hashlib
 import json
 import os
 import re
@@ -33,7 +29,7 @@ except ImportError:                     # Python < 3.7 (e.g. Ubuntu 16.04: 3.5)
         daemon_threads = True
 from urllib.parse import parse_qs, urlparse
 
-try:                      # only needed to make old recordings browser-ready / to time recordings without a map
+try:                      # only needed to time recordings without a map
     import av
 except ImportError:
     av = None
@@ -41,27 +37,17 @@ except ImportError:
 import mvmap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CACHE = os.path.join(HERE, "player_cache")
 LIVE = None                                       # liveview.Live when --live-dir is given
 CONFIG_DIR = os.path.join(HERE, "configs")        # the tuning panel saves/loads configs/<camera>.json here (see --config-dir)
 TUNE_KEYS = ("mv_min", "min_cluster", "global_limit", "window", "trigger_frames", "pre_roll", "post_roll", "ignore")
-PATCH_REFS = 4  # max_num_ref_frames written into the SPS by --video patch
-# <name>_<HHMMSS>.mp4 (rtspcam.py); any other *.mp4 is accepted too, its time of day then comes from the file time
+# <name>_<HHMMSS>.mp4 (the recorder); any other *.mp4 is accepted too, its time of day then comes from the file time
 FNAME = re.compile(r"^(?P<stem>.+?)(?:_(?P<hms>\d{6}))?\.mp4$")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _need_av():
-    if av is None:
-        raise RuntimeError("PyAV is required to convert this recording for the browser (pip install av), "
-                           "or convert it once with: python h264fix.py <file>")
-
-
 class Library:
-    def __init__(self, root, cache_gb, video_mode="direct"):
-        self.video_mode = video_mode
+    def __init__(self, root):
         self.root = os.path.realpath(root)
-        self.cache_cap = int(cache_gb * (1 << 30))
         self.lock = threading.Lock()
         self.meta = {}                        # per-recording summary, kept in memory only (built at start-up by warm_up(), nothing on disk)
 
@@ -157,93 +143,6 @@ class Library:
         if not p.startswith(self.root + os.sep) or not os.path.isfile(p):
             return None
         return p
-
-    # ---- faststart copy ----------------------------------------------------------
-    def web_copy(self, path, mode=None):
-        mode = mode if mode in ("direct", "copy", "patch", "transcode") else self.video_mode
-        if mode == "direct":
-            return path          # the recorder already writes browser-ready files: serve the file itself
-        if mode == "patch":
-            import h264fix
-            if h264fix.is_ready(path):
-                return path      # already fixed: no copy needed
-        os.makedirs(CACHE, exist_ok=True)
-        st = os.stat(path)
-        key = hashlib.md5(("%s|%s|%d|%d" % (mode, path, st.st_size, st.st_mtime)).encode()).hexdigest()[:16]
-        out = os.path.join(CACHE, key + ".mp4")
-        with self.lock:
-            if not os.path.exists(out):
-                {"transcode": self._transcode, "patch": self._patch, "copy": self._remux}[mode](path, out + ".tmp")
-                os.replace(out + ".tmp", out)
-                self.evict(keep=out)
-            os.utime(out)
-        return out
-
-    @staticmethod
-    def _remux(path, tmp):
-        _need_av()
-        src = av.open(path)
-        vs = src.streams.video[0]
-        dst = av.open(tmp, "w", format="mp4", options={"movflags": "faststart"})
-        ds = dst.add_stream_from_template(vs)
-        base = None
-        for pkt in src.demux(vs):
-            if pkt.dts is None or pkt.size == 0:
-                continue
-            base = pkt.dts if base is None else base
-            pkt.dts -= base
-            if pkt.pts is not None:
-                pkt.pts -= base
-            pkt.stream = ds
-            dst.mux(pkt)
-        dst.close()
-        src.close()
-
-    @staticmethod
-    def _patch(path, tmp):
-        import h264fix
-        h264fix.remux_patched(path, tmp, refs=PATCH_REFS)
-
-    @staticmethod
-    def _transcode(path, tmp):
-        """Full-resolution re-encode with the original frame timestamps (no B-frames, 2 s GOP)."""
-        _need_av()
-        src = av.open(path)
-        vs = src.streams.video[0]
-        vs.thread_type = "AUTO"
-        ctx = vs.codec_context
-        dst = av.open(tmp, "w", format="mp4", options={"movflags": "faststart"})
-        ds = dst.add_stream("libx264", rate=int(round(float(vs.average_rate or 25))))
-        ds.width, ds.height, ds.pix_fmt = ctx.width, ctx.height, "yuv420p"
-        ds.time_base = vs.time_base
-        ds.codec_context.time_base = vs.time_base
-        ds.codec_context.gop_size = max(1, int(round(2 * float(vs.average_rate or 25))))
-        ds.codec_context.max_b_frames = 0
-        ds.codec_context.options = {"preset": "veryfast", "crf": "22", "profile": "high"}
-        base = None
-        for frame in src.decode(vs):
-            if frame.pts is None:
-                continue
-            base = frame.pts if base is None else base
-            nf = frame.reformat(format="yuv420p")   # swscale converts full-range yuvj420p correctly
-            nf.pts = frame.pts - base
-            nf.time_base = vs.time_base
-            for pkt in ds.encode(nf):
-                dst.mux(pkt)
-        for pkt in ds.encode(None):
-            dst.mux(pkt)
-        dst.close()
-        src.close()
-
-    def evict(self, keep):
-        files = [os.path.join(CACHE, f) for f in os.listdir(CACHE) if f.endswith(".mp4")]
-        total = sum(os.path.getsize(f) for f in files)
-        for f in sorted(files, key=os.path.getmtime):
-            if total <= self.cache_cap:
-                break
-            if f != keep:
-                total -= os.path.getsize(f)
-                os.remove(f)
 
 
 def make_handler(lib):
@@ -343,13 +242,11 @@ def make_handler(lib):
                     path = self.cfg_path(q["name"][0])
                     data = open(path, "rb").read() if os.path.exists(path) else b"{}"
                     return self.send_bytes(data, "application/json")
-                if u.path == "/api/config":
-                    return self.send_bytes(json.dumps({"video": lib.video_mode}).encode(), "application/json")
                 if u.path == "/video":
                     p = lib.resolve(q["id"][0], ".mp4")
                     if not p:
                         return self.send_bytes(b"not found", "text/plain", 404)
-                    return self.send_file(lib.web_copy(p, q.get("mode", [None])[0]))
+                    return self.send_file(p)
             except (BrokenPipeError, ConnectionResetError):
                 return
             except Exception as e:
@@ -391,7 +288,7 @@ def make_handler(lib):
 def main():
     global CONFIG_DIR, LIVE
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("root", help="recordings root (the -o directory of rtspcam.py)")
+    ap.add_argument("root", help="recordings root (the -o directory of the recorder)")
     ap.add_argument("--port", type=int, default=8780)
     ap.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to reach it from other machines "
                                                           "(there is no authentication!)")
@@ -400,11 +297,6 @@ def main():
                                        "the same one liveview.py serves on its own")
     ap.add_argument("--cameras", help="with --live-dir: comma separated order of the cameras in the live grid "
                                       "(default: the sockets, sorted)")
-    ap.add_argument("--cache-gb", type=float, default=5, help="size cap of the browser copies")
-    ap.add_argument("--video", choices=["direct", "patch", "transcode", "copy"], default="direct",
-                    help="direct = serve the files as they are (default; rtspcam.py already writes browser-ready "
-                         "files); for recordings without the fix: patch = lossless SPS fix into a cached copy, "
-                         "transcode = re-encode (slow), copy = plain remux (all need PyAV)")
     a = ap.parse_args()
     CONFIG_DIR = a.config_dir
     if a.cameras and not a.live_dir:
@@ -412,7 +304,7 @@ def main():
     if a.live_dir:
         from liveview import Live
         LIVE = Live(a.live_dir, [c.strip() for c in a.cameras.split(",") if c.strip()] if a.cameras else None)
-    lib = Library(a.root, a.cache_gb, a.video)
+    lib = Library(a.root)
     threading.Thread(target=lib.warm_up, daemon=True).start()
     srv = ThreadingHTTPServer((a.host, a.port), make_handler(lib))
     print("player: http://%s:%d   root: %s" % (a.host, a.port, lib.root), flush=True)
