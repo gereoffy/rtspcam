@@ -11,7 +11,7 @@
   .tile { position: relative; background: #000; min-height: 0; min-width: 0; cursor: pointer; }
   video { width: 100%; height: 100%; object-fit: contain; display: block; transform-origin: 0 0; }
   .tile { overflow: hidden; }
-  .tile.zoomed { cursor: grab; } .tile.panning { cursor: grabbing; }
+  .tile.zoomed { cursor: grab; touch-action: none; } .tile.panning { cursor: grabbing; }
   .lbl { position: absolute; left: 4px; top: 4px; background: rgba(0,0,0,.55); padding: 2px 6px; border-radius: 4px;
          font: 12px ui-monospace, monospace; pointer-events: none; display: none; }
   .tile.nopic .lbl { display: block; }        /* text only on a tile without a picture */
@@ -94,13 +94,14 @@ class Tile {
       const k = nz / this.z; this.px = cx - (cx - this.px) * k; this.py = cy - (cy - this.py) * k; this.z = nz;     // the point under the cursor stays
       this.applyZoom();
     }, {passive: false});
-    this.el.addEventListener('mousedown', e => {
+    this.el.addEventListener('pointerdown', e => {
       if (this.z <= 1 || e.button !== 0 || e.target.closest('a')) return;
-      const sx = e.clientX, sy = e.clientY, px0 = this.px, py0 = this.py; let moved = false;
-      this.el.classList.add('panning');
-      const mv = ev => { const dx = ev.clientX - sx, dy = ev.clientY - sy; if (!moved && Math.hypot(dx, dy) < 3) return; moved = true; this.px = px0 + dx; this.py = py0 + dy; this.applyZoom(); };
-      const up = () => { removeEventListener('mousemove', mv); removeEventListener('mouseup', up); this.el.classList.remove('panning'); if (moved) this.noClick = true; };
-      addEventListener('mousemove', mv); addEventListener('mouseup', up); e.preventDefault();
+      const sx = e.clientX, sy = e.clientY, px0 = this.px, py0 = this.py, id = e.pointerId; let moved = false;
+      this.el.classList.add('panning'); try { this.el.setPointerCapture(id); } catch (x) {}
+      const mv = ev => { if (ev.pointerId !== id) return; const dx = ev.clientX - sx, dy = ev.clientY - sy; if (!moved && Math.hypot(dx, dy) < 3) return; moved = true; this.px = px0 + dx; this.py = py0 + dy; this.applyZoom(); };
+      const up = ev => { if (ev.pointerId !== id) return; this.el.removeEventListener('pointermove', mv); this.el.removeEventListener('pointerup', up); this.el.removeEventListener('pointercancel', up);
+        try { this.el.releasePointerCapture(id); } catch (x) {} this.el.classList.remove('panning'); if (moved) this.noClick = true; };
+      this.el.addEventListener('pointermove', mv); this.el.addEventListener('pointerup', up); this.el.addEventListener('pointercancel', up); e.preventDefault();
     });
     this.stuck = 0; this.restarts = 0; this.reconnects = 0; this.connected = false;
     this.status('kapcsolódás…'); this.start();
