@@ -62,6 +62,16 @@ python3 liveview.py --live-dir /run/rtspcam --host 0.0.0.0 --port 8781  # http:/
 ```
 
 A kapcsolók ugyanazok, mint az `rtspcam.py`-nál (`--config` JSON is megy), kivéve:
+- `--config FILE`: **a fájl erősebb a parancssornál** (fordítva, mint az `rtspcam.py`-nál): a parancssor a közös
+  alapértékeket adja (pl. `start_live.sh` → `ARGS`), a fájl a kamera saját, a lejátszó hangoló paneljén mentett
+  értékeit; a fájl `ignore` listája lecseréli a parancssori zónákat. Ha a fájl még nem létezik, az nem hiba: a
+  parancssori értékek élnek, amíg meg nem jelenik. A futó rögzítő **percenként megnézi** (idő és méret), és ha
+  változott, újraolvassa: a határértékek (`mv_min`, `min_cluster`, `global_limit`, `trigger_frames`, `pre_roll`,
+  `post_roll`, …) a következő képkockától érvényesek, az új zónák is (a detektor állapota megmarad); csak a `window`
+  vagy a `max_ref_dist` változásakor kezdi elölről a detektor a hiszterézist. A kapcsolat és a futó felvétel nem
+  szakad meg; a naplóba kiírja a változást (`config … reread: mv_min 5 -> 6, ignore 0 -> 2 zone(s)`). Hibás
+  (pl. félig mentett) fájlnál a régi értékek maradnak. A fájlból kivett kulcs a parancssori értékre áll vissza.
+  A futó felvétel `.mvmap` fejlécében a kezdéskori értékek állnak.
 - csak TCP (RTP a vezérlő kapcsolaton, interleaved), `--transport` kapcsoló nincs;
 - hitelesítés: az URL-ben megadott `rtsp://felhasználó:jelszó@...` alapján Basic vagy Digest (MD5, MD5-sess, qop=auth),
   amelyiket a kamera kéri; a naplóban a jelszó helyén `***` áll;
@@ -111,8 +121,8 @@ küldenek, a YGTek ilyenkor a nagy IDR-képek tartalmát a kamerában elrontja �
 ## Fájlok
 - `mvparse.c/.h` – mozgásvektorok kiolvasása képdekódolás nélkül (csak CABAC entrópia-dekódolás; az együtthatókat
   kiolvassa és eldobja). Az ffmpeg H.264 dekóderéből portolva → **LGPL-2.1+**. `h264_cabac_tables.c`: az ffmpeg táblái.
-- `options.c/.h` – az `rtspcam.py`-jal azonos parancssor és `--config` JSON (a fájl adja az alapértékeket,
-  a parancssori kapcsoló felülírja, a `--ignore` hozzáadódik).
+- `options.c/.h` – az `rtspcam.py`-jal azonos parancssor és `--config` JSON (a fájl erősebb a parancssornál, az
+  `ignore` listája lecseréli a parancssori zónákat; a menet közbeni újraolvasás a `main.c`-ben).
 - `motion.c/.h` – a `MotionDetector` megfelelője (zónák, klaszterezés, hiszterézis, térkép-szintek).
 - `mvmap_writer.c/.h` – `.mvmap` író (formátum: `../mvmap.py`).
 - `session.c/.h` – a `run_session()` állapotgépe (pre-roll puffer, post-roll, `--max-segment`, `--max-tail`);

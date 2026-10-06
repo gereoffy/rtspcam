@@ -12,7 +12,8 @@ typedef struct rc_opts {
     int viewonly;           /* analyse and serve --live, but write no files */
     double min_free;        /* MB that must be free on the output disk to start a recording (0: no check) */
     char *name;
-    char *config;
+    char *config;           /* JSON file; its values win over the command line */
+    int config_missing;     /* --config was given but the file does not exist (yet) */
     char *out;
     double timeout;
     int always;

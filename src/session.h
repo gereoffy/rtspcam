@@ -68,6 +68,11 @@ int rcs_set_map_path(rc_session *s, const char *path);
  * (live.h; owned by the caller, it may outlive the session). fix_refs as for the MP4 writer. */
 struct live_srv;
 void rcs_set_live(rc_session *s, struct live_srv *live, int fix_refs);
+/* The detection settings of the options (the rc_opts the session was created with) were changed
+ * in place. The thresholds need nothing (they are read on every picture); new --ignore zones are
+ * converted again (zones); a new window or reference distance makes the detector start over
+ * (restart). Recording goes on either way. */
+int rcs_reconfigure(rc_session *s, int zones, int restart);
 /* closes an open recording and frees everything */
 void rcs_free(rc_session *s);
 

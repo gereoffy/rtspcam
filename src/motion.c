@@ -52,6 +52,20 @@ int mt_init(mt_det *d, const rc_opts *a, int width, int height)
     return parse_zones(d, a);
 }
 
+int mt_reload_zones(mt_det *d)
+{
+    double (*old)[4] = d->zones;
+    int n_old = d->n_zones;
+    if (parse_zones(d, d->a) < 0) {
+        free(d->zones);
+        d->zones = old;
+        d->n_zones = n_old;
+        return -1;
+    }
+    free(old);
+    return 0;
+}
+
 void mt_free(mt_det *d)
 {
     free(d->zones);

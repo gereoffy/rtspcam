@@ -10,6 +10,7 @@
 #include <dirent.h>
 #include <math.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -260,6 +261,122 @@ static int on_au(void *opaque, const uint8_t *au, int size, int64_t ts, int key,
     return rcs_packet(r->s, au, size, ts, ts, key, broken);
 }
 
+/* ---------------------------------------------------------------- --config reload */
+
+#ifndef CONFIG_CHECK_S
+#define CONFIG_CHECK_S 60.0     /* how often the --config file's time and size are looked at */
+#endif
+
+static rc_opts *opts;           /* the settings in use (the session points to them) */
+static int opt_argc;
+static char **opt_argv;
+static struct { int exists; time_t mtime; off_t size; } cfg_seen;
+static double cfg_next_check;
+
+/* what main() changes after parsing (so that a reread compares like with like) */
+static void normalize_opts(rc_opts *o)
+{
+    if (o->viewonly) {
+        o->map = 0;
+        o->vectors = 0;
+    }
+}
+
+static void cfg_stamp(const char *path)
+{
+    struct stat st;
+    cfg_seen.exists = stat(path, &st) == 0;
+    cfg_seen.mtime = cfg_seen.exists ? st.st_mtime : 0;
+    cfg_seen.size = cfg_seen.exists ? st.st_size : 0;
+}
+
+static void addf(char *b, size_t cap, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+static void addf(char *b, size_t cap, const char *fmt, ...)
+{
+    size_t n = strlen(b);
+    va_list ap;
+    if (n + 1 >= cap)
+        return;
+    va_start(ap, fmt);
+    vsnprintf(b + n, cap - n, fmt, ap);
+    va_end(ap);
+}
+
+
+/* Rereads --config (the camera's alarm thresholds, saved by the player) when its time or size
+ * changed (checked every CONFIG_CHECK_S). The new values apply from the next picture: the
+ * detector and the state machine read them from opts on every picture; new --ignore zones are
+ * converted to pixels again; only a new window size (the hysteresis memory) or reference
+ * distance makes the detector start over (s: the running session, NULL between sessions). A
+ * file that cannot be parsed (half written?) or has a bad zone keeps the current values until
+ * it changes again. */
+static void check_config(rc_session *s)
+{
+    struct stat st;
+    rc_opts n;
+    char err[512], msg[2048] = "";
+    int exists, i, same_zones, restart;
+
+    if (!opts || !opts->config || mono() < cfg_next_check)
+        return;
+    cfg_next_check = mono() + CONFIG_CHECK_S;
+    exists = stat(opts->config, &st) == 0;
+    if (exists == cfg_seen.exists && (!exists || (st.st_mtime == cfg_seen.mtime && st.st_size == cfg_seen.size)))
+        return;
+    cfg_stamp(opts->config);
+    if (!exists) {
+        log_warn("config %s is gone: the current settings stay", opts->config);
+        return;
+    }
+    if (rc_parse_args(&n, opt_argc, opt_argv, err, sizeof(err)) != 0) {
+        log_warn("config %s changed but cannot be used (%s): the current settings stay", opts->config, err);
+        rc_opts_free(&n);
+        return;
+    }
+    normalize_opts(&n);
+    for (i = 0; i < n.n_ignore; i++) {
+        double z[4];
+        if (sscanf(n.ignore[i], "%lf,%lf,%lf,%lf", &z[0], &z[1], &z[2], &z[3]) != 4) {
+            log_warn("config %s: bad ignore zone '%s' (x0,y0,x1,y1): the current settings stay", opts->config,
+                     n.ignore[i]);
+            rc_opts_free(&n);
+            return;
+        }
+    }
+
+    /* the detector's memory depends on these: it starts over when they change */
+    restart = n.window != opts->window || n.max_ref_dist != opts->max_ref_dist;
+#define CHG_D(f) if (n.f != opts->f) { addf(msg, sizeof(msg), "%s" #f " %g -> %g", *msg ? ", " : "", opts->f, n.f); opts->f = n.f; }
+#define CHG_I(f) if (n.f != opts->f) { addf(msg, sizeof(msg), "%s" #f " %d -> %d", *msg ? ", " : "", opts->f, n.f); opts->f = n.f; }
+    CHG_D(mv_min) CHG_D(min_blocks) CHG_I(min_cluster) CHG_D(global_limit) CHG_I(window) CHG_I(trigger_frames)
+    CHG_I(max_ref_dist) CHG_I(skip_after_key) CHG_D(pre_roll) CHG_D(post_roll) CHG_D(max_segment) CHG_D(max_tail)
+    same_zones = n.n_ignore == opts->n_ignore;
+    for (i = 0; same_zones && i < n.n_ignore; i++)
+        same_zones = !strcmp(n.ignore[i], opts->ignore[i]);
+    if (!same_zones) {
+        char **t = opts->ignore;
+        int tn = opts->n_ignore;
+        addf(msg, sizeof(msg), "%signore %d -> %d zone(s)", *msg ? ", " : "", opts->n_ignore, n.n_ignore);
+        opts->ignore = n.ignore;
+        opts->n_ignore = n.n_ignore;
+        n.ignore = t;                   /* the old list is freed with n */
+        n.n_ignore = tn;
+    }
+#undef CHG_D
+#undef CHG_I
+    opts->config_missing = 0;
+    rc_opts_free(&n);
+
+    if (!*msg) {
+        log_info("config %s reread: no change", opts->config);
+        return;
+    }
+    log_info("config %s reread: %s%s", opts->config, msg,
+             restart ? " (the detector starts over: new window/reference distance)" : "");
+    if (s && rcs_reconfigure(s, !same_zones, restart) < 0)
+        log_error("cannot apply the new settings to the detector");
+}
+
 /* one connection; returns when the stream drops or a stop is requested */
 static live_srv *live;          /* --live: kept over reconnects */
 
@@ -319,6 +436,7 @@ static void run_session(const rc_opts *a, const mp4_options *mo)
             continue;
         }
         r.rtp++;
+        check_config(r.s);              /* (a time comparison; the file is looked at once a minute) */
         if (live)
             live_poll(live);            /* keep the viewers' data flowing between pictures */
         if (rtp_h264_push(dp, pkt, n) < 0) {
@@ -377,9 +495,20 @@ int main(int argc, char **argv)
         return failed ? 1 : 0;
     }
 
+    opts = &a;
+    opt_argc = argc;
+    opt_argv = argv;
+    if (a.config) {
+        cfg_stamp(a.config);
+        cfg_next_check = mono() + CONFIG_CHECK_S;
+        if (a.config_missing)
+            log_info("config %s does not exist (yet): the command line settings apply; it is read when it appears "
+                     "(checked every %.0f s)", a.config, (double)CONFIG_CHECK_S);
+        else
+            log_info("settings from %s (over the command line; reread when it changes)", a.config);
+    }
+    normalize_opts(&a);
     if (a.viewonly) {                           /* everything as usual, but nothing is written */
-        a.map = 0;
-        a.vectors = 0;
         if (!a.live)
             log_warn("--viewonly without --live: the camera is only analysed (alarms in the log)");
     } else {
@@ -402,6 +531,7 @@ int main(int argc, char **argv)
         log_info("reconnecting in %ds", backoff);
         until = mono() + backoff;
         while (!stop_requested && mono() < until) {
+            check_config(NULL);
             if (live) {
                 /* the viewers see stale pictures: tell them the camera is offline (repeated
                  * every 2 s like the normal status, so that the state stays fresh) */

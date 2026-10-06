@@ -55,6 +55,9 @@ typedef struct mt_det {
 
 int mt_init(mt_det *d, const rc_opts *a, int width, int height);
 void mt_free(mt_det *d);
+/* the options' --ignore zones changed: convert them again (the detector's state is kept);
+ * on a bad zone the old ones stay */
+int mt_reload_zones(mt_det *d);
 
 /* Feed a parsed picture. Returns -1 for key frames (unknown: the caller keeps its state),
  * else 1 for a motion frame and 0 otherwise. Adopts a new frame size (resets the window). */

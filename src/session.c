@@ -893,6 +893,16 @@ int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_
     return 0;
 }
 
+int rcs_reconfigure(rc_session *s, int zones, int restart)
+{
+    int w = s->det.w > 0 ? s->det.w : 1280, h = s->det.h > 0 ? s->det.h : 720;
+    if (!restart)
+        return zones ? mt_reload_zones(&s->det) : 0;
+    mt_free(&s->det);
+    mvp_set_max_ref_dist(s->mvp, s->a->max_ref_dist);
+    return mt_init(&s->det, s->a, w, h);
+}
+
 void rcs_free(rc_session *s)
 {
     int i;

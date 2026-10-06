@@ -1,13 +1,16 @@
-/* Command line and --config JSON handling, compatible with rtspcam.py's argparse setup:
- * the JSON keys are the option names with '_' (e.g. "mv_min"), the file sets the
- * defaults and explicit command-line flags win; --ignore on the command line is
- * appended to the zones from the file. */
+/* Command line and --config JSON handling: the JSON keys are the option names with '_'
+ * (e.g. "mv_min"). Unlike rtspcam.py the file wins: the command line gives the common
+ * defaults (start_live.sh, the same for every camera), the file the camera's own tuned
+ * values (saved by the player's tuning panel); an "ignore" list in the file replaces the
+ * zones of the command line. A --config file that does not exist (yet) is not an error:
+ * the command line values apply until it appears (the recorder rereads it, see main.c). */
 #include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 
 #include "options.h"
 
@@ -26,7 +29,7 @@ typedef struct opt_def {
 
 static const opt_def opts[] = {
     { "--name", "-n", "name", T_STR, OFF(name), "camera name (used in paths), required" },
-    { "--config", NULL, "config", T_STR, OFF(config), "JSON file with tuned heuristics (saved by tune.py)" },
+    { "--config", NULL, "config", T_STR, OFF(config), "JSON file with the camera's tuned settings (saved by the player); wins over the command line, reread when it changes" },
     { "--out", "-o", "out", T_STR, OFF(out), "output root directory (recordings)" },
     { "--timeout", NULL, "timeout", T_FLOAT, OFF(timeout), "network timeout in s (10)" },
     { "--always", NULL, "always", T_TRUE, OFF(always), "record continuously (segments only)" },
@@ -463,10 +466,8 @@ int rc_parse_args(rc_opts *o, int argc, char **argv, char *err, int errlen)
     int i, pass;
 
     set_defaults(o);
-    /* pass 0: only --config (its values become the defaults), pass 1: everything */
+    /* pass 0: only --config, pass 1: everything; then the file (it wins) */
     for (pass = 0; pass < 2; pass++) {
-        if (pass == 1 && o->config && load_config(o, o->config, err, errlen) < 0)
-            return -1;
         for (i = 1; i < argc; i++) {
             const char *arg = argv[i], *val;
             const opt_def *d;
@@ -521,6 +522,12 @@ int rc_parse_args(rc_opts *o, int argc, char **argv, char *err, int errlen)
             if (set_from_string(o, d, val, err, errlen) < 0)
                 return -1;
         }
+    }
+    if (o->config) {
+        if (access(o->config, F_OK) < 0 && errno == ENOENT)
+            o->config_missing = 1;              /* not tuned yet: the command line applies */
+        else if (load_config(o, o->config, err, errlen) < 0)
+            return -1;
     }
     if (!o->url) {
         snprintf(err, errlen, "the following arguments are required: url");
