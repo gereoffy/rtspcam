@@ -40,6 +40,7 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
 .row{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
 .row .grow{flex:1}
 #hud{color:var(--dim);font-variant-numeric:tabular-nums}
+#fname{color:var(--fg);text-decoration:none}#fname:hover{color:var(--acc);text-decoration:underline}
 #msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);pointer-events:none;text-align:center;padding:20px}
 #tunepanel{display:none;margin-top:12px;border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:#191c22}
 #tunepanel .tp-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
@@ -120,7 +121,7 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
       <select id="gain" style="display:none" title="hang: néma, vagy a hangerő (2×–8×: erősítés halk felvételekhez, csak lejátszáskor, a fájl nem változik; a hangos részeket egy limiter fogja vissza). M: néma / az utolsó hangerő"><option value="0" selected>🔇 Néma</option><option value="1">🔊 1×</option><option value="2">🔊 2×</option><option value="4">🔊 4×</option><option value="8">🔊 8×</option></select>
       <button id="tunebtn" title="a riasztási beállítások hangolása: csúszkák, zónák, mentés a kamera konfigjába. Bekapcsolva az idővonal és a kockák a .mvvec-ből és a csúszkákból számolódnak (a rögzítő .mvmap-je helyett); ha a felvételhez nincs .mvvec, a szerver legenerálja">⚙ Beállítások</button>
     </div>
-    <div class="row vrow"><span id="hud"></span></div>
+    <div class="row vrow" style="gap:0"><a id="fname" title="letöltés · jobb gomb: link másolása (pl. e-mailbe)"></a><span id="hud"></span></div>
     <div id="tunepanel">
       <div class="tp-grid" id="tsliders"></div>
       <div class="row"><button id="drawz" title="húzz egy téglalapot a képen: ezt a területet a rögzítő figyelmen kívül hagyja">▭ Zóna rajzolása</button><span id="zlist"></span><button id="zclear">Zónák törlése</button></div>
@@ -283,6 +284,8 @@ if (haveRvfc) { const rv = (now, md) => { mediaT = cbMedia = md.mediaTime; cbNow
 async function select(it, setHash) {
   if (cur && (cur.camera !== it.camera || $('autozoom').checked)) { followSig = ''; zoom = 1; applyZoom(); }   // a new camera or an autozoom view starts at 1x
   cur = it; if (setHash) location.hash = encodeURIComponent(it.id);
+  // the file name is the download link (right click: copy it, e.g. into an e-mail; the server sends it as an attachment)
+  const fn = $('fname'); fn.textContent = it.name + '.mp4'; fn.href = '/video?id=' + encodeURIComponent(it.id) + '&dl=1'; fn.download = it.name + '.mp4';
   document.querySelectorAll('.item').forEach(e => e.classList.toggle('sel', e.dataset.id === it.id));
   $('msg').textContent = 'Betöltés… (az első megnyitásnál a fájl előkészítése pár másodperc)'; $('msg').style.display = 'flex';
   v.pause(); curFrame = -1; loading = true; dirty = true;
@@ -534,8 +537,10 @@ function drawVectors() {
     octx.fill(); }
 }
 const escHtml = t => String(t).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
-const hudName = () => cur ? '<span style="color:var(--fg)">' + escHtml(cur.name) + '.mp4</span> · ' : '';   // the file name leads the time line
-const hudNameOnly = () => cur ? '<span style="color:var(--fg)">' + escHtml(cur.name) + '.mp4</span>' : '';
+// the file name leads the time line: a download link of its own (#fname, set in select()), not part of the hud text that
+// is rewritten on every frame (a link replaced under the mouse would lose clicks and the context menu)
+const hudName = () => cur ? '&nbsp;· ' : '';
+const hudNameOnly = () => '';
 function drawOverlay() {
   if (tuneOn) return drawOverlayTune();
   fit(ov); octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, ov.width, ov.height);

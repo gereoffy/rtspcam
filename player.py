@@ -28,7 +28,7 @@ try:
 except ImportError:                     # Python < 3.7 (e.g. Ubuntu 16.04: 3.5)
     class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 try:                      # only needed to time recordings without a map
     import av
@@ -322,14 +322,14 @@ def make_handler(lib):
                     p = lib.resolve(q["id"][0], ".mp4")
                     if not p:
                         return self.send_bytes(b"not found", "text/plain", 404)
-                    return self.send_file(p)
+                    return self.send_file(p, download="dl" in q)     # /video?id=...&dl=1: the download link
             except (BrokenPipeError, ConnectionResetError):
                 return
             except Exception as e:
                 return self.send_bytes(str(e).encode(), "text/plain", 500)
             self.send_bytes(b"not found", "text/plain", 404)
 
-        def send_file(self, path):
+        def send_file(self, path, download=False):
             size = os.path.getsize(path)
             start, end, code = 0, size - 1, 200
             m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
@@ -345,6 +345,10 @@ def make_handler(lib):
             self.send_header("Content-Type", "video/mp4")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(end - start + 1))
+            if download:                      # a download link (also when opened from an e-mail): save, not play
+                name = os.path.basename(path)
+                self.send_header("Content-Disposition", "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (
+                    name.encode("ascii", "replace").decode().replace('"', "_"), quote(name)))
             if code == 206:
                 self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
             self.end_headers()
