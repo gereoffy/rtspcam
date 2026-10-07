@@ -474,12 +474,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "%s: error: %s\n", argv[0], err);
         return 2;
     }
-    if (a.fix == FIX_REMUX) {
-        fprintf(stderr, "%s: error: --fix remux is not supported, use inline or off\n", argv[0]);
-        return 2;
-    }
     log_setup(a.name, a.debug);
-    mo.fix_refs = a.fix == FIX_INLINE ? FIX_REFS : 0;
+    mo.fix_refs = a.fix ? FIX_REFS : 0;
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_signal;

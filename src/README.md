@@ -75,7 +75,11 @@ A kapcsolók ugyanazok, mint az `rtspcam.py`-nál (`--config` JSON is megy), kiv
 - csak TCP (RTP a vezérlő kapcsolaton, interleaved), `--transport` kapcsoló nincs;
 - hitelesítés: az URL-ben megadott `rtsp://felhasználó:jelszó@...` alapján Basic vagy Digest (MD5, MD5-sess, qop=auth),
   amelyiket a kamera kéri; a naplóban a jelszó helyén `***` áll;
-- `--fix inline` (alapértelmezett) vagy `--fix off`; a `remux` nincs;
+- `--fix` (kapcsoló, alapból ki; az `rtspcam.py` `--fix inline|remux|off` értékei helyett): az SPS-ben a
+  `max_num_ref_frames`-t 4-re írja (veszteségmentes), mert az Intellio kamerák (ILD-420E) streamjét a böngészők
+  hardveres dekódere e nélkül szellemképesen játssza le (lejátszó és élőkép is); a többi kameránál (Dahua, Hikvision,
+  kínai) nem kell. Kameránként a configban is megadható: `"fix": true` (ez csak induláskor számít, az újraolvasás nem
+  változtat rajta);
 - új: `--viewonly`: nem ír fájlt (se `.mp4`, se `.mvmap`/`.mvvec`, könyvtárat sem hoz létre), minden más ugyanúgy megy:
   elemzés, riasztás, a felvétel indítása/leállítása „elvben” (a naplóban `EVENT start/stop`), és a `--live` élőkép a
   piros/narancs kerettel. Olyan kamerákhoz, amelyeknek csak az élőképe kell (pl. forgalmas utca).

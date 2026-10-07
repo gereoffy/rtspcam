@@ -14,7 +14,7 @@
 
 #include "options.h"
 
-enum { T_STR, T_FLOAT, T_INT, T_TRUE, T_FALSE, T_APPEND, T_FIX };
+enum { T_STR, T_FLOAT, T_INT, T_TRUE, T_FALSE, T_APPEND };
 
 typedef struct opt_def {
     const char *flag;       /* long flag */
@@ -46,7 +46,7 @@ static const opt_def opts[] = {
     { "--post-roll", NULL, "post_roll", T_FLOAT, OFF(post_roll), "seconds kept after the last motion (8)" },
     { "--max-segment", NULL, "max_segment", T_FLOAT, OFF(max_segment), "split long events (600 s)" },
     { "--max-tail", NULL, "max_tail", T_FLOAT, OFF(max_tail), "max wait for a key frame to close a file (5 s)" },
-    { "--fix", NULL, "fix", T_FIX, OFF(fix), "inline|remux|off: browser-friendly SPS (inline)" },
+    { "--fix", NULL, "fix", T_TRUE, OFF(fix), "rewrite max_num_ref_frames in the SPS for the browsers' decoders (needed by the Intellio cameras only)" },
     { "--no-map", NULL, "map", T_FALSE, OFF(map), "do not write the .mvmap sidecar" },
     { "--live", NULL, "live", T_STR, OFF(live), "DIR: live stream for viewers on the socket DIR/<name>.sock" },
     { "--vectors", NULL, "vectors", T_TRUE, OFF(vectors), "also write <file>.mvvec: longest motion vector per 16x16 cell" },
@@ -88,7 +88,6 @@ static void set_defaults(rc_opts *o)
     o->post_roll = 8;
     o->max_segment = 600;
     o->max_tail = 5;
-    o->fix = FIX_INLINE;
     o->map = 1;
     o->min_free = 100;
 }
@@ -162,16 +161,6 @@ static int set_from_string(rc_opts *o, const opt_def *d, const char *val, char *
         return 0;
     case T_APPEND:
         return append_ignore(o, val);
-    case T_FIX:
-        if (!strcmp(val, "inline"))
-            o->fix = FIX_INLINE;
-        else if (!strcmp(val, "remux"))
-            o->fix = FIX_REMUX;
-        else if (!strcmp(val, "off"))
-            o->fix = FIX_OFF;
-        else
-            break;
-        return 0;
     }
     snprintf(err, errlen, "argument %s: invalid value: '%s'", d->flag, val);
     return -1;

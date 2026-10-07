@@ -2,8 +2,6 @@
 #ifndef RC_OPTIONS_H
 #define RC_OPTIONS_H
 
-enum { FIX_OFF = 0, FIX_INLINE = 1, FIX_REMUX = 2 };
-
 typedef struct rc_opts {
     char *url;              /* first positional argument */
     char **inputs;          /* all positional arguments (several files for map generation) */
@@ -32,7 +30,7 @@ typedef struct rc_opts {
     double post_roll;
     double max_segment;
     double max_tail;
-    int fix;                /* FIX_* */
+    int fix;                /* --fix: max_num_ref_frames rewritten in the SPS (Intellio cameras, browser ghosting) */
     int map;
     int vectors;            /* also write the .mvvec motion field sidecar */
     int audio;              /* also record the camera's AAC audio (not in the live view) */
