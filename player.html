@@ -56,15 +56,15 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
 #tunepanel input[type=range]{width:100%;accent-color:var(--acc);padding:0}
 #tunepanel small{display:block;color:var(--dim);font-size:11px}#tunepanel .zone{display:inline-flex;gap:4px;align-items:center;background:#2a2f39;border-radius:10px;padding:1px 4px 1px 10px;font-size:12px;color:var(--dim)}
 #tunepanel .zone button{padding:0 6px;border-radius:8px}
-.seg{display:inline-flex}.seg button{border-radius:0;margin:0}.seg button:first-child{border-radius:6px 0 0 6px}.seg button:last-child{border-radius:0 6px 6px 0;border-left:0}
-.seg button.on{background:var(--acc);color:#04121f;border-color:var(--acc);font-weight:600}
 #tunebtn.on{background:#ffd23f;border-color:#ffd23f;color:#201800}
+.step{display:inline-flex;align-items:stretch}.step button{border-radius:0;margin:0}.step button:first-child{border-radius:6px 0 0 6px}.step button:last-child{border-radius:0 6px 6px 0}
+.step span{display:flex;align-items:center;padding:0 8px;background:#2a2f39;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--dim)}
 #modebadge{position:absolute;top:8px;left:8px;padding:2px 10px;border-radius:12px;font-size:12px;pointer-events:none;background:#000b;color:#fff}
 #modebadge.tune{background:#ffd23fee;color:#201800;font-weight:600}
 #tl.tuning{outline:2px solid #ffd23f}
 #sz{touch-action:none;width:100%;height:90px;display:block;margin-top:4px;border-radius:4px;background:#101216;cursor:pointer}
 #drawz.on{background:#ffd23f;color:#201800;border-color:#ffd23f}
-#mute.on{background:var(--acc);color:#04121f;border-color:var(--acc)}
+#gain.on{background:var(--acc);color:#04121f;border-color:var(--acc)}
 .wrap.drawing{cursor:crosshair}
 .wrap.drawing,.wrap.zoomed{touch-action:none}
 @media(max-width:1250px){#tunepanel .tp-grid{grid-template-columns:repeat(2,1fr)}}
@@ -115,11 +115,10 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
     </div>
     <div class="row vrow">
       <button id="play" style="min-width:90px">▶ Lejátszás</button>
-      <button id="prev" title="előző kocka (←)">◀ kocka</button><button id="next" title="következő kocka (→)">kocka ▶</button>
-      <select id="speed" title="sebesség"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
-      <button id="mute" title="hang be/ki (M)" style="display:none">🔇 Néma</button>
-      <select id="gain" style="display:none" title="hangerősítés halk felvételekhez (csak lejátszáskor, a fájl nem változik; a hangos részeket egy limiter fogja vissza)"><option value="1">hang 1×</option><option value="2">hang 2×</option><option value="4">hang 4×</option><option value="8">hang 8×</option><option value="16">hang 16×</option></select>
-      <span class="seg" title="mi alapján látszik az idővonal és a kockák"><button id="recbtn" class="on" title="az idővonal és a kockák a rögzítő által írt .mvmap-ből">Rögzítő (.mvmap)</button><button id="tunebtn" title="a riasztási paraméterek hangolása a .mvvec-ből, csúszkákkal (a .mvmap-et ilyenkor nem használja)">⚙ Hangolás (.mvvec)</button></span>
+      <select id="speed" title="lejátszási sebesség"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
+      <span class="step" title="kockánkénti léptetés (←/→, Shift: 10 kocka)"><button id="prev" title="előző kocka (←)">◀</button><span>kocka</span><button id="next" title="következő kocka (→)">▶</button></span>
+      <select id="gain" style="display:none" title="hang: néma, vagy a hangerő (2×–8×: erősítés halk felvételekhez, csak lejátszáskor, a fájl nem változik; a hangos részeket egy limiter fogja vissza). M: néma / az utolsó hangerő"><option value="0" selected>🔇 Néma</option><option value="1">🔊 1×</option><option value="2">🔊 2×</option><option value="4">🔊 4×</option><option value="8">🔊 8×</option></select>
+      <button id="tunebtn" title="a riasztási beállítások hangolása: csúszkák, zónák, mentés a kamera konfigjába. Bekapcsolva az idővonal és a kockák a .mvvec-ből és a csúszkákból számolódnak (a rögzítő .mvmap-je helyett); ha a felvételhez nincs .mvvec, a szerver legenerálja">⚙ Beállítások</button>
     </div>
     <div class="row vrow"><span id="hud"></span></div>
     <div id="tunepanel">
@@ -290,13 +289,13 @@ async function select(it, setHash) {
   v.pause(); curFrame = -1; loading = true; dirty = true;
   vecs = null; vecLoading = false; vecError = false; follow = null; followSig = '';
   if ($('ovmode').value !== 'cells' || tuneOn) loadVec(it);
-  // sound controls only with a sound track (asked for this recording alone; hidden until the answer)
-  $('mute').style.display = $('gain').style.display = 'none'; curAudio = false;
+  // the sound selector only with a sound track (asked for this recording alone; hidden until the answer)
+  $('gain').style.display = 'none'; curAudio = false;
   fetch('/api/audio?id=' + encodeURIComponent(it.id)).then(r => r.json()).then(a => {
     if (cur !== it || !a.audio) return;
-    curAudio = true; $('mute').style.display = $('gain').style.display = '';
+    curAudio = true; $('gain').style.display = '';
   }).catch(() => {});
-  $('modebadge').textContent = tuneOn ? 'HANGOLÁS · .mvvec + csúszkák' : 'rögzítő · .mvmap'; $('tunebtn').disabled = false; $('tunebtn').title = 'a riasztási paraméterek hangolása a .mvvec-ből, csúszkákkal (a .mvmap-et ilyenkor nem használja); ha a felvételhez nincs .mvvec, a szerver legenerálja';
+  $('modebadge').textContent = tuneOn ? 'HANGOLÁS · .mvvec + csúszkák' : 'rögzítő · .mvmap'; $('tunebtn').disabled = false;
   await loadMap(it);
   if (tuneOn && cur === it) tuneForCamera(it);   // (after loadMap: its header gives the recording's own settings)
   v.src = '/video?id=' + encodeURIComponent(it.id);
@@ -314,19 +313,23 @@ v.addEventListener('pause', () => $('play').textContent = '▶ Lejátszás');
 v.addEventListener('ended', () => { if (!$('auto').checked || !cur) return;
   const nxt = shown.filter(i => i.camera === cur.camera && i.ts > cur.ts).sort((a,b) => a.ts - b.ts)[0]; if (nxt) select(nxt, true); });
 $('play').onclick = () => { if (!cur) return; if (v.ended) v.currentTime = 0; v.paused ? v.play() : v.pause(); };
-// sound: muted on every page load; the button (or M) switches it
+// sound: one selector, "muted" (on every page load) or the volume 1x..8x; M switches between muted and the last volume
 var curAudio = false;                               // the selected recording has a sound track (/api/audio)
+let lastGain = '1';
+try { const g = localStorage.getItem('rc_gain'); if (g && g !== '0' && [...$('gain').options].some(o => o.value === g)) lastGain = g; } catch (e) {}
 v.muted = true;
-const muteUI = () => { $('mute').textContent = v.muted ? '🔇 Néma' : '🔊 Hang'; $('mute').classList.toggle('on', !v.muted); };
-$('mute').onclick = () => { v.muted = !v.muted; muteUI(); if (!v.muted) audioGain(); };
-v.addEventListener('volumechange', muteUI);
-muteUI();
+function setVolume(val) {
+  $('gain').value = val; $('gain').classList.toggle('on', val !== '0');
+  v.muted = val === '0';
+  if (val !== '0') { lastGain = val; try { localStorage.setItem('rc_gain', val); } catch (e) {} audioGain(); }
+}
+$('gain').addEventListener('change', () => setVolume($('gain').value));
 // amplification for quiet recordings: <video> -> gain -> limiter -> speakers (Web Audio). The graph is made at
 // the first use (browsers allow an AudioContext only after a click); from then on all sound goes through it.
 let actx = null, gnode = null;
 function audioGain() {
   const g = +$('gain').value;
-  if (!actx && g === 1) return;                     // 1x needs no graph
+  if (!actx && g <= 1) return;                      // 1x needs no graph
   try {
     if (!actx) {
       actx = new (window.AudioContext || window.webkitAudioContext)();
@@ -336,11 +339,9 @@ function audioGain() {
       actx.createMediaElementSource(v).connect(gnode); gnode.connect(lim); lim.connect(actx.destination);
     }
     if (actx.state === 'suspended') actx.resume();
-    gnode.gain.value = g;
+    gnode.gain.value = Math.max(1, g);
   } catch (e) { console.warn('audio gain', e); }
 }
-try { const g = localStorage.getItem('rc_gain'); if (g && [...$('gain').options].some(o => o.value === g)) $('gain').value = g; } catch (e) {}
-$('gain').addEventListener('change', () => { try { localStorage.setItem('rc_gain', $('gain').value); } catch (e) {} audioGain(); });
 // ---- zoom (wheel, at the cursor) and pan (drag); double click resets ----
 const ZMAX = 12;
 let zoom = 1, panX = 0, panY = 0, suppressClick = false;
@@ -471,7 +472,7 @@ function stepFrame(d) {
 $('prev').onclick = () => stepFrame(-1); $('next').onclick = () => stepFrame(1);
 addEventListener('keydown', e => { if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.code === 'ArrowLeft') { e.preventDefault(); stepFrame(e.shiftKey ? -10 : -1); } else if (e.code === 'ArrowRight') { e.preventDefault(); stepFrame(e.shiftKey ? 10 : 1); }
-  else if (e.code === 'KeyM' && curAudio) $('mute').click(); });
+  else if (e.code === 'KeyM' && curAudio) setVolume($('gain').value === '0' ? lastGain : '0'); });
 // The length comes from the data (map; else the list's value that the server read from the map/container), not from the <video>: while a fragmented MP4 is
 // still downloading (slow link, e.g. an SSH tunnel) Firefox reports only the length of what it has parsed so far, which grows - the timeline would rescale.
 const dur = () => vdur || (cur && cur.duration) || (isFinite(v.duration) && v.duration > 0 ? v.duration : 0);
@@ -720,7 +721,7 @@ function drawOverlayTune() {
 function tuneMode(on) {
   follow = null; followSig = '';                                // the autozoom track depends on the data source
   $('stage').classList.toggle('tuning', on);                    // the two-button mode switch, the picture badge and the timeline frame show which data is on screen
-  $('tunebtn').classList.toggle('on', on); $('recbtn').classList.toggle('on', !on); tl.classList.toggle('tuning', on);
+  $('tunebtn').classList.toggle('on', on); tl.classList.toggle('tuning', on);
   const b = $('modebadge'); b.classList.toggle('tune', on); b.textContent = on ? 'HANGOLÁS · .mvvec + csúszkák' : 'rögzítő · .mvmap';
 }
 // The panel shows one camera's settings. A recording of another camera switches them: the name, then the values this
@@ -748,7 +749,7 @@ function tuneClose(msg) {
   tuneOn = false; drawZone = false; tpreview = null; $('drawz').classList.remove('on'); $('wrap').classList.remove('drawing');
   $('tunepanel').style.display = 'none'; tuneMode(false); if (msg) { $('info').textContent = msg; $('inforow').style.display = ''; } dirty = true;
 }
-$('tunebtn').onclick = () => { if (!tuneOn) tuneOpen(); }; $('recbtn').onclick = () => { if (tuneOn) tuneClose(); };
+$('tunebtn').onclick = () => { if (tuneOn) tuneClose(); else tuneOpen(); };   // a toggle: on = the settings panel below
 // --- zones: drag a rectangle on the picture (works while zoomed) ---
 const wfrac = e => { const r = $('wrap').getBoundingClientRect(); return [Math.min(1, Math.max(0, ((e.clientX - r.left - panX) / zoom) / r.width)), Math.min(1, Math.max(0, ((e.clientY - r.top - panY) / zoom) / r.height))]; };
 $('drawz').onclick = () => { drawZone = !drawZone; $('drawz').classList.toggle('on', drawZone); $('wrap').classList.toggle('drawing', drawZone); };
@@ -801,7 +802,8 @@ function szCompute() {
   return szCache = {v: vecs, kind, win, a, med, big, g};
 }
 function drawSizes() {
-  const show = !!(vecs && vecs.fbytes && vecs.t.length); $('szbox').style.display = show ? '' : 'none'; if (!show) return;
+  // (only with the settings panel)
+  const show = !!(tuneOn && vecs && vecs.fbytes && vecs.t.length); $('szbox').style.display = show ? '' : 'none'; if (!show) return;
   fit(sz); const W = sz.width, H = sz.height, dpr = devicePixelRatio || 1; sctx.clearRect(0, 0, W, H);
   const T = dur(); if (!cur || !T) return; const c = szCompute(), N = vecs.t.length, X = t => t / T * W, yTop = c.g * SZP.scale, Y = b => H - Math.min(1, b / yTop) * (H - 8), sm = tuneOn && tA ? tA.sizeMov : null;
   for (let i = 0; i < N; i++) { const x0 = Math.round(X(vecs.t[i] / 1000)), x1 = Math.max(x0 + 1, Math.round(X((i + 1 < N ? vecs.t[i + 1] : vecs.t[i] + 40) / 1000))), y = Math.round(Y(c.a[i]));
