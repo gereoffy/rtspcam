@@ -127,9 +127,8 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
       <div id="tstats" style="margin-top:8px;font-size:14px"></div>
       <div class="row"><label style="margin:0;color:var(--dim)">Kamera neve <input type="text" id="tname" size="12"></label><button id="tload">Betöltés</button><button id="tsave" style="background:var(--acc);color:#04121f;border-color:var(--acc);font-weight:600">Mentés</button><span id="tmsg" style="color:var(--dim);font-size:12px"></span></div>    </div>
     <div class="row" id="settings">
-      <label class="chk"><input type="checkbox" id="showov" checked> mozgástérkép</label>
-      <label class="chk"><input type="checkbox" id="onlybest" checked title="a sárga (zaj) blokkok eltűnnek, csak a narancs és a piros marad"> zaj elrejtése (sárga)</label>
-      <select id="ovmode" title="mit rajzoljon a képre: a riasztó kockákat, a mozgásvektorokat (.mvvec; a vonal hossza a vektor hossza, a színe az iránya) vagy mindkettőt"><option value="cells">kockák</option><option value="vec">vektorok</option><option value="both">kockák + vektorok</option></select>
+      <label class="chk"><input type="checkbox" id="showov"> mozgástérkép</label>
+      <select id="ovmode" title="mit rajzoljon a képre: kockák = a riasztó (piros) és a legnagyobb küszöb alatti (narancs) csoport; kockák + zaj = a többi mozgó cella is (sárga); vektorok = a mozgásvektorok (.mvvec; a vonal hossza a vektor hossza, a színe az iránya)"><option value="cells">kockák</option><option value="noise">kockák + zaj</option><option value="vec">vektorok</option></select>
       <label class="chk" title="lejátszáskor magától belenagyít a riasztó (piros) képrészletbe és követi: a piros kockák befoglaló téglalapjának kb. kétszeresét mutatja, simított mozgással. Kézi nagyítás/húzás kikapcsolja."><input type="checkbox" id="autozoom"> autozoom</label>
       <label class="chk" title="a felvétel végén automatikusan elindul ugyanannak a kamerának a következő felvétele"><input type="checkbox" id="auto"> autoplay</label>
     </div>
@@ -288,7 +287,7 @@ async function select(it, setHash) {
   $('msg').textContent = 'Betöltés… (az első megnyitásnál a fájl előkészítése pár másodperc)'; $('msg').style.display = 'flex';
   v.pause(); curFrame = -1; loading = true; dirty = true;
   vecs = null; vecLoading = false; vecError = false; follow = null; followSig = '';
-  if ($('ovmode').value !== 'cells' || tuneOn) loadVec(it);
+  if ($('ovmode').value === 'vec' || tuneOn) loadVec(it);
   // the sound selector only with a sound track (asked for this recording alone; hidden until the answer)
   $('gain').style.display = 'none'; curAudio = false;
   fetch('/api/audio?id=' + encodeURIComponent(it.id)).then(r => r.json()).then(a => {
@@ -516,7 +515,7 @@ async function loadVec(it) {
   if (tuneOn && vecs) tuneRecompute(1);
 }
 function drawVectors() {
-  if (!vecs || loading || !$('showov').checked || effMode() === 'cells') return;
+  if (!vecs || loading || !$('showov').checked || effMode() !== 'vec') return;
   const ms = vt() * 1000 + 8; let lo = 0, hi = vecs.t.length - 1;
   while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (vecs.t[mid] <= ms) lo = mid; else hi = mid - 1; }
   let i = lo; for (let k = 0; k < 8 && i > 0 && !vecs.has[i]; k++) i--;     // key / not analysed frame: show the last grid
@@ -549,7 +548,7 @@ function drawOverlay() {
   for (let k = 0; k < 8 && f > 0 && (fl[f] & 16); k++) f--;
   if ($('showov').checked && effMode() !== 'vec' && !(fl[f] & SKIPF) && cnt[f]) {
     // letterbox-aware scale: the <video> uses object-fit: contain
-    const W = ov.width, H = ov.height, s = Math.min(W / hdr.w, H / hdr.h), ox = (W - hdr.w*s)/2, oy = (H - hdr.h*s)/2, only = $('onlybest').checked;
+    const W = ov.width, H = ov.height, s = Math.min(W / hdr.w, H / hdr.h), ox = (W - hdr.w*s)/2, oy = (H - hdr.h*s)/2, only = $('ovmode').value === 'cells';
     const dpr = devicePixelRatio || 1; octx.setTransform(zoom, 0, 0, zoom, panX * dpr, panY * dpr);   // same zoom/pan as the <video>
     for (let i = 0; i < cnt[f]; i++) { const c = bodyDv.getUint16(off[f] + 3*i, true), l = bodyDv.getUint8(off[f] + 3*i + 2);
       if (only && l === 1) continue;
@@ -559,7 +558,7 @@ function drawOverlay() {
   }
   drawVectors();
   const t = v.currentTime, T = dur();
-  const vst = $('ovmode').value === 'cells' ? '' : vecLoading ? ' · vektorok betöltése…' : vecError ? ' · a vektorok nem tölthetők be' + (typeof vecError === 'string' ? ': ' + vecError : '') : '';
+  const vst = $('ovmode').value !== 'vec' ? '' : vecLoading ? ' · vektorok betöltése…' : vecError ? ' · a vektorok nem tölthetők be' + (typeof vecError === 'string' ? ': ' + vecError : '') : '';
   $('hud').innerHTML = `${hudName()}${fmtClock(t)} / ${fmtClock(T)} · kocka ${curFrame + 1}/${tms.length}${vst}` + (flags & 4 ? ' · <span style="color:var(--rec);font-weight:700">⚑ riasztás</span>' : '') + (flags & 2 ? ' · mozgás' : '');
 }
 const fmtClock = s => { s = Math.max(0, s || 0); return Math.floor(s/60) + ':' + (s % 60).toFixed(1).padStart(4, '0'); };
@@ -701,7 +700,7 @@ function drawOverlayTune() {
   const W = ov.width, H = ov.height, s = Math.min(W / vecs.w, H / vecs.h), ox = (W - vecs.w * s) / 2, oy = (H - vecs.h * s) / 2, dpr = devicePixelRatio || 1;
   octx.setTransform(zoom, 0, 0, zoom, panX * dpr, panY * dpr);
   if ($('showov').checked && effMode() !== 'vec' && vecs.has[i]) {
-    const r = tuneAnalyze(i, true), only = $('onlybest').checked;      // same colours as the recorder's map: red >= threshold, orange = largest below it, yellow = the rest
+    const r = tuneAnalyze(i, true), only = $('ovmode').value === 'cells';      // same colours as the recorder's map: red >= threshold, orange = largest below it, yellow = the rest
     for (const idx of r.act) { const id = tlab[idx], lvl = r.sizes[id] >= TP.min_cluster ? 3 : (id === r.bestId ? 2 : 1); if (only && lvl === 1) continue;
       const gx = (idx % tGW) - 1, gy = ((idx / tGW) | 0) - 1;
       // a frame the global_limit throws out (the picture moves too much, e.g. camera shake): its alarm cells are purple, like its bar on the timeline
@@ -824,7 +823,7 @@ szUI();
 $('szratio').addEventListener('input', e => { SZP.ratio = +e.target.value; try { localStorage.setItem('rc_szratio', SZP.ratio); } catch (x) {} szUI(); if (tuneOn && vecs) tuneRecompute(2); dirty = true; });
 $('szscale').addEventListener('change', e => { SZP.scale = +e.target.value; try { localStorage.setItem('rc_szscale', SZP.scale); } catch (x) {} dirty = true; });
 let lastKey = '';
-const drawKey = () => v.currentTime.toFixed(3) + '|' + $('showov').checked + $('onlybest').checked + $('ovmode').value;
+const drawKey = () => v.currentTime.toFixed(3) + '|' + $('showov').checked + $('ovmode').value;
 function drawAll() {
   lastKey = drawKey(); dirty = false;
   // each part on its own: an exception in one drawing function must not stop the loop (the timeline and the picture would freeze)
@@ -834,10 +833,10 @@ function loop() {
   if (dirty || drawKey() !== lastKey || (!v.paused && $('autozoom').checked)) drawAll();       // (playing with autozoom: the view glides, every display frame)
   requestAnimationFrame(loop);
 }
-['showov', 'onlybest'].forEach(id => $(id).addEventListener('change', () => dirty = true));
+$('showov').addEventListener('change', () => dirty = true);
 try { const m = localStorage.getItem('rc_ovmode'); if (m && [...$('ovmode').options].some(o => o.value === m)) $('ovmode').value = m; } catch (e) {}
 $('ovmode').addEventListener('change', () => { try { localStorage.setItem('rc_ovmode', $('ovmode').value); } catch (e) {}
-  if ($('ovmode').value !== 'cells' && cur && !vecs && !vecLoading) loadVec(cur); dirty = true; });
+  if ($('ovmode').value === 'vec' && cur && !vecs && !vecLoading) loadVec(cur); dirty = true; });
 new ResizeObserver(() => applyZoom()).observe($('wrap'));
 loadList().then(loop);
 </script>
