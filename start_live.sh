@@ -1,7 +1,5 @@
 #! /bin/bash
 
-(cd src; make)
-
 HOST=127.0.0.1
 PORT=8888
 
@@ -11,6 +9,7 @@ LOG=log
 
 cd "$(dirname "$0")" || exit 1
 mkdir -p "$OUT" "$LIVE" "$LOG"
+(cd src; make)
 
 cat cameras.url |while read line; do
     NEV=$(echo $line|cut -d ' ' -f 1)
@@ -22,11 +21,11 @@ cat cameras.url |while read line; do
     else
         CFG="configs/DEFAULT.json"
     fi
-    echo ./src/rtspcam "$URL" -n "$NEV" -o "$OUT" --live "$LIVE" --config "$CFG" --vectors --fix off --audio '>>' "$LOG/$NEV.log"
-    ./src/rtspcam "$URL" -n "$NEV" -o "$OUT" --live "$LIVE" --config "$CFG" --vectors --fix off --audio >> "$LOG/$NEV.log" 2>&1 < /dev/null &
+#    echo ./src/rtspcam "$URL" -n "$NEV" -o "$OUT" --live "$LIVE" --config "$CFG" --vectors --audio '>>' "$LOG/$NEV.log"
+    ./src/rtspcam "$URL" -n "$NEV" -o "$OUT" --live "$LIVE" --config "$CFG" --vectors --audio >> "$LOG/$NEV.log" 2>&1 < /dev/null &
 done
 
 CAMS=$(cut -d ' ' -f 1 <cameras.url)
 ORDER=$(echo $CAMS|tr ' ' ',')
-echo python3 player.py --live-dir "$LIVE" --host "$HOST" --port "$PORT" --cameras "$ORDER" "$OUT" '>>' "$LOG/player.log"
+#echo python3 player.py --live-dir "$LIVE" --host "$HOST" --port "$PORT" --cameras "$ORDER" "$OUT" '>>' "$LOG/player.log"
 python3 player.py --live-dir "$LIVE" --host "$HOST" --port "$PORT" --cameras "$ORDER" "$OUT" >> "$LOG/player.log" 2>&1 < /dev/null &
