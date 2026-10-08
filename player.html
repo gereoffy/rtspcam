@@ -121,7 +121,7 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
       <select id="gain" style="display:none" title="hang: néma, vagy a hangerő (2×–8×: erősítés halk felvételekhez, csak lejátszáskor, a fájl nem változik; a hangos részeket egy limiter fogja vissza). M: néma / az utolsó hangerő"><option value="0" selected>🔇 Néma</option><option value="1">🔊 1×</option><option value="2">🔊 2×</option><option value="4">🔊 4×</option><option value="8">🔊 8×</option></select>
       <button id="tunebtn" title="a riasztási beállítások hangolása: csúszkák, zónák, mentés a kamera konfigjába. Bekapcsolva az idővonal és a kockák a .mvvec-ből és a csúszkákból számolódnak (a rögzítő .mvmap-je helyett); ha a felvételhez nincs .mvvec, a szerver legenerálja">⚙ Beállítások</button>
     </div>
-    <div class="row vrow" style="gap:0"><a id="fname" title="letöltés · jobb gomb: link másolása (pl. e-mailbe)"></a><span id="hud"></span></div>
+    <div class="row vrow" style="gap:0"><a id="fname" title="kattintás: letöltés · jobb gomb → link másolása: e-mailbe küldhető, megnyitva a böngészőben lejátssza (annak, aki eléri ezt a szervert)"></a><span id="hud"></span></div>
     <div id="tunepanel">
       <div class="tp-grid" id="tsliders"></div>
       <div class="row"><button id="drawz" title="húzz egy téglalapot a képen: ezt a területet a rögzítő figyelmen kívül hagyja">▭ Zóna rajzolása</button><span id="zlist"></span><button id="zclear">Zónák törlése</button></div>
@@ -284,8 +284,9 @@ if (haveRvfc) { const rv = (now, md) => { mediaT = cbMedia = md.mediaTime; cbNow
 async function select(it, setHash) {
   if (cur && (cur.camera !== it.camera || $('autozoom').checked)) { followSig = ''; zoom = 1; applyZoom(); }   // a new camera or an autozoom view starts at 1x
   cur = it; if (setHash) location.hash = encodeURIComponent(it.id);
-  // the file name is the download link (right click: copy it, e.g. into an e-mail; the server sends it as an attachment)
-  const fn = $('fname'); fn.textContent = it.name + '.mp4'; fn.href = '/video?id=' + encodeURIComponent(it.id) + '&dl=1'; fn.download = it.name + '.mp4';
+  // the file name is a link to the recording: a click here downloads it (the download attribute), while the copied link
+  // (right click, e.g. into an e-mail) opens it in the browser and plays it (for anyone who reaches this server)
+  const fn = $('fname'); fn.textContent = it.name + '.mp4'; fn.href = '/video?id=' + encodeURIComponent(it.id); fn.download = it.name + '.mp4';
   document.querySelectorAll('.item').forEach(e => e.classList.toggle('sel', e.dataset.id === it.id));
   $('msg').textContent = 'Betöltés… (az első megnyitásnál a fájl előkészítése pár másodperc)'; $('msg').style.display = 'flex';
   v.pause(); curFrame = -1; loading = true; dirty = true;

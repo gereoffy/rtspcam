@@ -322,7 +322,9 @@ def make_handler(lib):
                     p = lib.resolve(q["id"][0], ".mp4")
                     if not p:
                         return self.send_bytes(b"not found", "text/plain", 404)
-                    return self.send_file(p, download="dl" in q)     # /video?id=...&dl=1: the download link
+                    # (&dl=1: sent as an attachment, a link that always downloads; the player's file name link is the plain
+                    # one, which plays when opened, e.g. from an e-mail, and downloads when clicked there: download attribute)
+                    return self.send_file(p, download="dl" in q)
             except (BrokenPipeError, ConnectionResetError):
                 return
             except Exception as e:
