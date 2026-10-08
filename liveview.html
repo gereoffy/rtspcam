@@ -72,6 +72,18 @@ function singleView(big) {
   if (big) parkTimer = setTimeout(() => tiles.forEach(t => { if (t !== big) t.park(); }), PARK_MS);
   else tiles.forEach(t => t.unpark());
 }
+// one camera large (tile) or the grid (null); the URL says which: /live#name (back arrow: the grid, like in ZoneMinder)
+function showView(big) {
+  if (big && big.el.classList.contains('big')) return;
+  tiles.forEach(t => { t.el.classList.toggle('big', t === big); t.z = 1; t.applyZoom(); });
+  grid.classList.toggle('single', !!big);
+  singleView(big);
+}
+function viewFromUrl() {
+  const name = decodeURIComponent(location.hash.slice(1));
+  showView(tiles.find(t => t.name === name) || null);
+}
+addEventListener('popstate', viewFromUrl);
 class Tile {
   constructor(name) {
     this.name = name;
@@ -87,11 +99,16 @@ class Tile {
     this.el.onclick = () => {
       if (this.noClick) { this.noClick = false; return; }         // the end of a drag
       if (this.z > 1) { this.z = 1; this.applyZoom(); return; }    // zoomed in: a click goes back to 1x, at 1x it goes back to the grid
-      const big = !this.el.classList.contains('big');
-      document.querySelectorAll('.tile').forEach(t => { t.classList.remove('big'); });
-      tiles.forEach(t => { t.z = 1; t.applyZoom(); });
-      if (big) this.el.classList.add('big'); grid.classList.toggle('single', big);
-      singleView(big ? this : null); };
+      if (!this.el.classList.contains('big')) {                    // grid -> this camera: a history entry (/live#name), so
+        history.pushState({single: this.name}, '', '#' + encodeURIComponent(this.name));   // the browser's back arrow returns
+        showView(this);
+      } else if (history.state && history.state.single === this.name) {
+        history.back();                                            // (the same as the back arrow: popstate shows the grid)
+      } else {                                                     // opened as /live#name (a link): no entry to go back to
+        history.replaceState(null, '', location.pathname + location.search);
+        showView(null);
+      }
+    };
     // zoom (wheel, at the cursor) and pan (drag) of the single large picture, like in the player; a click resets
     this.el.addEventListener('wheel', e => {
       if (!this.el.classList.contains('big')) return;
@@ -244,6 +261,7 @@ class Tile {
 const err = document.getElementById('err'), t0 = Date.now();
 if (!cams.length) { err.textContent = 'Hiba: nem fut a rögzítő (nincs élőkép-csatorna)'; err.style.display = 'block'; }
 const tiles = cams.map(c => new Tile(c));
+viewFromUrl();                                          // /live#name opens that camera large
 setInterval(() => tiles.forEach(t => t.tick()), 1000);
 // alarm (red frame) and recording (REC) state of the recorders
 setInterval(async () => {
