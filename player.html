@@ -301,15 +301,24 @@ async function select(it, setHash) {
   $('modebadge').textContent = tuneOn ? 'HANGOLÁS · .mvvec + csúszkák' : 'rögzítő · .mvmap'; $('tunebtn').disabled = false;
   await loadMap(it);
   if (tuneOn && cur === it) tuneForCamera(it);   // (after loadMap: its header gives the recording's own settings)
+  // start where the alarm begins (the green band; the map's first triggered picture), not at the pre-roll and the GOP
+  // before it, where nothing happens for seconds; rewinding still shows them
+  startAt = 0;
+  for (let i = 0; i < tms.length; i++) if (fl[i] & 4) { startAt = tms[i] / 1000; break; }
   v.src = '/video?id=' + encodeURIComponent(it.id);
+  if (startAt > 0) v.currentTime = startAt;
   v.playbackRate = +$('speed').value;
   const notes = [it.has_map ? '' : 'nincs .mvmap – overlay nélkül'].filter(Boolean).join(' · ');
   $('info').textContent = notes; $('inforow').style.display = notes ? '' : 'none';
   dirty = true;
   try { await v.play(); } catch (e) {}
 }
+let startAt = 0;                                    // where select() starts the recording (seconds)
 v.addEventListener('loadeddata', () => { $('msg').style.display = 'none'; loading = false; dirty = true; });
-v.addEventListener('loadedmetadata', () => setAspect(v.videoWidth, v.videoHeight));
+v.addEventListener('loadedmetadata', () => {
+  setAspect(v.videoWidth, v.videoHeight);
+  if (startAt > 0 && v.currentTime < startAt - 0.05) v.currentTime = startAt;   // (some browsers drop a seek set before the metadata)
+});
 v.addEventListener('error', () => { $('msg').textContent = 'A videó nem tölthető be.'; $('msg').style.display = 'flex'; });
 v.addEventListener('play', () => $('play').textContent = '❚❚ Szünet');
 v.addEventListener('pause', () => $('play').textContent = '▶ Lejátszás');
