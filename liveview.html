@@ -241,9 +241,9 @@ class Tile {
     this.fq.push({t: now, f: q.totalVideoFrames, b: this.bytes});
     while (this.fq.length > 2 && now - this.fq[1].t >= 10000) this.fq.shift();
     // a moment without a decodable picture at the live edge is normal: the tile shows its text (no picture) only
-    // after 3 s of it
+    // after 5 s of it (rain: more bits, a slow line stalls for seconds)
     if (v.readyState >= 2) this.picT = now;
-    const pic = now - this.picT < 3000;
+    const pic = now - this.picT < 5000;
     if (this.lastq) {
       const f0 = this.fq[0], span = now - f0.t, fps = span >= 1000 ? (q.totalVideoFrames - f0.f) * 1000 / span : 0;
       const kbps = span >= 1000 ? (this.bytes - f0.b) * 8 / span : 0;              // (bytes*8/ms = kbit/s)
