@@ -84,8 +84,23 @@ class Hub:
             if q in self.subs:
                 self.subs.remove(q)
 
-    def _broadcast(self, data):
+    def _broadcast(self, data, gop_len=0):
+        """data to every viewer's queue. gop_len (with a key frame): the length of the GOP that just ended. A
+        viewer that still has at least that much unsent (a slow line: it is a GOP or more behind) skips it:
+        its queue is emptied and it continues with this key frame, so its delay stays within ~1-2 GOPs
+        instead of growing until the queue is full and the viewer is dropped"""
         for q in list(self.subs):
+            if gop_len and q.qsize() >= gop_len:
+                keep = []
+                try:
+                    while True:
+                        m = q.get_nowait()
+                        if m is self.init or m is END:      # (a new viewer's init segment must stay)
+                            keep.append(m)
+                except queue.Empty:
+                    pass
+                for m in keep:
+                    q.put_nowait(m)
             try:
                 q.put_nowait(data)
             except queue.Full:
@@ -129,6 +144,7 @@ class Hub:
                         if not self.subs:
                             idle = True
                             break
+                        gop_len = 0
                         if typ == INIT:
                             if self.init is not None:   # new stream parameters: viewers start over
                                 for q in self.subs:
@@ -139,10 +155,11 @@ class Hub:
                                 self.subs = []
                             self.init, self.gop = data, []
                         elif typ == KEY:
+                            gop_len = len(self.gop)     # (the GOP that ends here: the skip threshold)
                             self.gop = [data]
                         elif self.gop:
                             self.gop.append(data)
-                        self._broadcast(data)
+                        self._broadcast(data, gop_len)
                 s.close()
             except OSError:
                 pass
@@ -216,6 +233,13 @@ class Live:
                 h.send_error(404)
                 return True
             q = hub.subscribe()
+            # a small send buffer: what the line cannot take waits in the queue, where the hub sees it and skips a
+            # GOP (Hub._broadcast); in a large kernel buffer (several MB on Linux) it would be seconds of delay out of
+            # sight. 64 KB still keeps a ~10 Mbit/s line with tens of ms round trip full.
+            try:
+                h.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64 << 10)
+            except OSError:
+                pass
             h.send_response(200)
             h.send_header("Content-Type", "video/mp4")
             h.send_header("Cache-Control", "no-store")
