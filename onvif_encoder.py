@@ -97,7 +97,11 @@ class Camera:
         status = text.split("\r\n", 1)[0]
         if " 200 " not in status:
             fault = re.search(r"<(?:\w+:)?Text[^>]*>(.*?)</", text, re.S)
-            raise RuntimeError("%s %s" % (status, fault.group(1) if fault else ""))
+            if fault:
+                raise RuntimeError("%s %s" % (status, fault.group(1)))
+            body = text.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in text else ""
+            m = re.search(r"<(?:[\w-]+:)?Body[^>]*>(.*)</(?:[\w-]+:)?Body>", body, re.S)  # (the fault, not the namespaces)
+            raise RuntimeError("%s %s" % (status, " ".join((m.group(1) if m else body).split())[:800]))
         return text
 
     def find_media(self):
@@ -247,16 +251,44 @@ def set_time(cam, tz=None, fixed=False, dst=None):
     new_dst = dst if dst is not None else (tm["dst"] or "").lower() == "true"
     if not fixed and new_tz == tm["tz"] and new_dst == ((tm["dst"] or "").lower() == "true"):
         return False
-    body = ("<tds:SetSystemDateAndTime><tds:DateTimeType>%s</tds:DateTimeType><tds:DaylightSavings>%s"
-            "</tds:DaylightSavings><tds:TimeZone><tt:TZ>%s</tt:TZ></tds:TimeZone>" % (
-                mode, "true" if new_dst else "false", new_tz))
-    if mode.lower() == "manual":
-        u = datetime.datetime.utcnow()       # (manual: the time must be given too; this machine's, NTP-synced)
-        body += ("<tds:UTCDateTime><tt:Time><tt:Hour>%d</tt:Hour><tt:Minute>%d</tt:Minute><tt:Second>%d</tt:Second>"
-                 "</tt:Time><tt:Date><tt:Year>%d</tt:Year><tt:Month>%d</tt:Month><tt:Day>%d</tt:Day></tt:Date>"
-                 "</tds:UTCDateTime>" % (u.hour, u.minute, u.second, u.year, u.month, u.day))
-    cam.call("/onvif/device_service", body + "</tds:SetSystemDateAndTime>")
-    return True
+    zoneless = fixed and tm["tz"] is None and tm["utc"] is None
+
+    def make(tz_xml, local):
+        body = ("<tds:SetSystemDateAndTime><tds:DateTimeType>%s</tds:DateTimeType><tds:DaylightSavings>%s"
+                "</tds:DaylightSavings>" % (mode, "true" if new_dst else "false"))
+        if tz_xml is not None:
+            body += "<tds:TimeZone><tt:TZ>%s</tt:TZ></tds:TimeZone>" % tz_xml
+        if mode.lower() == "manual":    # (manual: the time must be given too; this machine's, NTP-synced)
+            u = datetime.datetime.now() if local else datetime.datetime.utcnow()
+            body += ("<tds:UTCDateTime><tt:Time><tt:Hour>%d</tt:Hour><tt:Minute>%d</tt:Minute><tt:Second>%d"
+                     "</tt:Second></tt:Time><tt:Date><tt:Year>%d</tt:Year><tt:Month>%d</tt:Month><tt:Day>%d</tt:Day>"
+                     "</tt:Date></tds:UTCDateTime>" % (u.hour, u.minute, u.second, u.year, u.month, u.day))
+        return body + "</tds:SetSystemDateAndTime>"
+    if not zoneless:
+        variants = [(new_tz, False)]
+    else:
+        # a camera without a time zone (it reports only a local time, e.g. the HS-Camera firmware): its clock
+        # is what it shows. Its parsers are picky; tried in turn: no zone + this machine's local time as the
+        # time, then zone UTC/GMT + the local time, then the real zone + UTC
+        off = int(round((datetime.datetime.now() - datetime.datetime.utcnow()).total_seconds() / 60.0))
+        variants = [(None, True), ("UTC0", True), ("GMT+00:00", True), (new_tz, False),
+                    ("GMT%+03d:%02d" % (off // 60, abs(off) % 60), False)]
+    errors = []
+    for tz_xml, local in variants:
+        body = make(tz_xml, local)
+        try:
+            cam.call("/onvif/device_service", body)
+            if errors:
+                print("note: accepted with time zone %s and %s time" % (tz_xml, "local" if local else "UTC"),
+                      file=sys.stderr)
+            return True
+        except RuntimeError as e:
+            if "not implemented" in str(e):     # (the HS-Camera firmware: the clock cannot be set over ONVIF)
+                raise RuntimeError("the camera cannot set its clock over ONVIF (SetSystemDateAndTime not implemented)")
+            errors.append("%s\n  (sent: %s)" % (e, body))
+            if " 400 " not in str(e):
+                break
+    raise RuntimeError("\n".join(errors))
 
 
 def camera_from(arg, cameras_file):
