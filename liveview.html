@@ -202,7 +202,7 @@ class Tile {
       }, {once: true});
     });
   }
-  push(chunk) { this.q.push(chunk); this.feed(); }
+  push(chunk) { this.bytes += chunk.length; this.q.push(chunk); this.feed(); }   // (bytes: for the bit rate)
   feed() {
     const sb = this.sb;
     if (!sb || sb.updating || !this.q.length) return;
@@ -216,7 +216,7 @@ class Tile {
   }
   stop() {
     if (this.ac) this.ac.abort();
-    this.sb = null; this.q = []; this.lastq = null; this.fq = []; this.picT = -1e9;
+    this.sb = null; this.q = []; this.lastq = null; this.fq = []; this.picT = -1e9; this.bytes = 0;
     if (this.v.src) { URL.revokeObjectURL(this.v.src); this.v.removeAttribute('src'); this.v.load(); }
   }
   tick() {                                  // stay near the live edge
@@ -235,16 +235,19 @@ class Tile {
     if (!q) return;
     const now = performance.now();
     // frame rate over the last 10 s (a 1 s count jumps around, and is 0 whenever the browser waits a moment at
-    // the live edge for the next picture - wifi cameras deliver in bursts)
-    this.fq.push({t: now, f: q.totalVideoFrames});
+    // the live edge for the next picture - wifi cameras deliver in bursts); the bit rate over the same window: what
+    // the camera really sends (the stream as recorded; the burst of the cached GOP at the start comes before the
+    // first sample, so it is not counted)
+    this.fq.push({t: now, f: q.totalVideoFrames, b: this.bytes});
     while (this.fq.length > 2 && now - this.fq[1].t >= 10000) this.fq.shift();
     // a moment without a decodable picture at the live edge is normal: the tile shows its text (no picture) only
     // after 3 s of it
     if (v.readyState >= 2) this.picT = now;
     const pic = now - this.picT < 3000;
     if (this.lastq) {
-      const f0 = this.fq[0], fps = now - f0.t >= 1000 ? (q.totalVideoFrames - f0.f) * 1000 / (now - f0.t) : 0;
-      this.status(`${v.videoWidth}x${v.videoHeight} · ${fps.toFixed(fps < 10 ? 1 : 0)} fps · késés ${(end - v.currentTime).toFixed(1)} s` +
+      const f0 = this.fq[0], span = now - f0.t, fps = span >= 1000 ? (q.totalVideoFrames - f0.f) * 1000 / span : 0;
+      const kbps = span >= 1000 ? (this.bytes - f0.b) * 8 / span : 0;              // (bytes*8/ms = kbit/s)
+      this.status(`${v.videoWidth}x${v.videoHeight} · ${fps.toFixed(fps < 10 ? 1 : 0)} fps · ${kbps.toFixed(0)} kbit/s · késés ${(end - v.currentTime).toFixed(1)} s` +
                   (this.reconnects ? ` · újracsatlakozott ${this.reconnects}×` : '') +
                   (this.restarts ? ` (ebből akadás miatt ${this.restarts}×)` : ''), false, pic);
       // watchdog: data arrives but no picture is shown for 4 s -> start this tile over

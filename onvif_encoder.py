@@ -3,12 +3,16 @@
 
     onvif_encoder.py CAMERA get
     onvif_encoder.py CAMERA set [--token VideoEncoder000] [--width 1920 --height 1080] [--fps 15]
-                                [--bitrate 2048] [--gop 30] [--profile Main]
+                                [--bitrate 2048] [--quality 5] [--gop 30] [--profile Main]
 
 CAMERA is an rtsp://user:password@host/... URL (host and credentials are taken from it) or a
 camera name from cameras.url ("<name> <rtsp url>" per line, next to this script or --cameras).
 Without --token, `set` changes the first encoder (normally the main stream). Settings that are
 not given stay as they are. The change is made persistent on the camera (ForcePersistence).
+
+Most cameras encode with a variable bit rate (VBR): then --bitrate is only the upper limit and a
+quiet picture gets far less (an Imou set to 2048 kbit/s sent 240); the picture quality (blocks
+when zoomed in) follows --quality (Dahua/Imou: 1-6). The live view shows the real bit rate.
 
 Useful for cameras without a web interface (e.g. Dahua/Imou), whose phone app may reset the
 stream settings: run `set` again (or from cron) after the app has been used. `set` only writes
@@ -116,9 +120,14 @@ def tag(xml, name):
 
 def describe(tok, xml):
     res = re.search(r"<tt:Resolution>\s*<tt:Width>(\d+)</tt:Width>\s*<tt:Height>(\d+)</tt:Height>", xml)
-    return "%-16s %-5s %5sx%-5s fps %-3s bitrate %-5s kbit/s  GOP %-4s profile %s" % (
+    q = tag(xml, "Quality")
+    try:
+        q = "%g" % float(q)                 # (Dahua writes 4.000000)
+    except ValueError:
+        pass
+    return "%-16s %-5s %5sx%-5s fps %-3s bitrate %-5s kbit/s  quality %-3s GOP %-4s profile %s" % (
         tok, tag(xml, "Encoding"), res.group(1) if res else "?", res.group(2) if res else "?",
-        tag(xml, "FrameRateLimit"), tag(xml, "BitrateLimit"), tag(xml, "GovLength"), tag(xml, "H264Profile"))
+        tag(xml, "FrameRateLimit"), tag(xml, "BitrateLimit"), q, tag(xml, "GovLength"), tag(xml, "H264Profile"))
 
 
 def set_value(xml, name, value):
@@ -160,6 +169,8 @@ def main():
     ap.add_argument("--bitrate", type=int, help="kbit/s")
     ap.add_argument("--gop", type=int, help="key frame interval in frames")
     ap.add_argument("--profile", choices=["Baseline", "Main", "High"])
+    ap.add_argument("--quality", type=float, help="encoding quality (Dahua/Imou: 1-6, higher is better). With variable bit "
+                    "rate (VBR) this sets how much the picture gets, the bit rate is only the upper limit")
     a = ap.parse_args()
 
     cam = camera_from(a.camera, a.cameras)
@@ -202,6 +213,13 @@ def main():
         conf = set_value(conf, "BitrateLimit", a.bitrate)
     if a.gop:
         conf = set_value(conf, "GovLength", a.gop)
+    if a.quality is not None:
+        try:
+            same = float(tag(conf, "Quality")) == a.quality      # (4.000000 == 4: no needless write)
+        except ValueError:
+            same = False
+        if not same:
+            conf = set_value(conf, "Quality", "%g" % a.quality)
     if a.profile:
         conf = set_value(conf, "H264Profile", a.profile)
     if conf == xml:
