@@ -247,7 +247,17 @@ class Tile {
     if (this.lastq) {
       const f0 = this.fq[0], span = now - f0.t, fps = span >= 1000 ? (q.totalVideoFrames - f0.f) * 1000 / span : 0;
       const kbps = span >= 1000 ? (this.bytes - f0.b) * 8 / span : 0;              // (bytes*8/ms = kbit/s)
-      this.status(`${v.videoWidth}x${v.videoHeight} · ${fps.toFixed(fps < 10 ? 1 : 0)} fps · ${kbps.toFixed(0)} kbit/s · késés ${(end - v.currentTime).toFixed(1)} s` +
+      const f1 = x => x.toFixed(x < 10 ? 1 : 0);
+      // The real delay: when the picture on screen arrived at the recorder (its live time against the newest
+      // picture's arrival, from the status), on the recorder's clock (clockOff). Without it (an older recorder)
+      // only what waits in the browser's buffer is known.
+      let delay = end - v.currentTime, here = '';
+      const c = this.cam;
+      if (c && clockOff !== null) {
+        delay = Math.max(0, (Date.now() + clockOff - c.wall_ms + (c.media_ms - v.currentTime * 1000)) / 1000);
+        here = `kamera ${f1(c.cam_fps)} fps ${c.cam_kbps} kbit/s · itt `;
+      }
+      this.status(`${v.videoWidth}x${v.videoHeight} · ${here}${f1(fps)} fps ${kbps.toFixed(0)} kbit/s · késés ${delay.toFixed(1)} s` +
                   (this.reconnects ? ` · újracsatlakozott ${this.reconnects}×` : '') +
                   (this.restarts ? ` (ebből akadás miatt ${this.restarts}×)` : ''), false, pic);
       // watchdog: data arrives but no picture is shown for 4 s -> start this tile over
@@ -267,11 +277,19 @@ const tiles = cams.map(c => new Tile(c));
 viewFromUrl();                                          // /live#name opens that camera large
 setInterval(() => tiles.forEach(t => t.tick()), 1000);
 // alarm (red frame) and recording (REC) state of the recorders
+// clockOff: the recorders' clock minus this browser's, from the status requests (the one with the shortest round
+// trip of the last 30 is the most exact)
+let clockOff = null; const clockSamples = [];
 setInterval(async () => {
   try {
-    const st = await (await fetch('/status', {cache: 'no-store'})).json();
+    const t1 = Date.now(), st = await (await fetch('/status', {cache: 'no-store'})).json(), t2 = Date.now();
+    if (st._now) {
+      clockSamples.push({rtt: t2 - t1, off: st._now - (t1 + t2) / 2}); if (clockSamples.length > 30) clockSamples.shift();
+      clockOff = clockSamples.reduce((a, b) => (b.rtt < a.rtt ? b : a)).off;
+    }
     for (const t of tiles) {
       const s = st[t.name] || {};
+      t.cam = s.wall_ms ? s : null;                   // the camera's own rates and the timing of its newest picture
       // a parked tile has no fresh state (nobody reads its recorder), and right after unparking the server needs a
       // moment for the first status: the old classes stay meanwhile (no flashing "nem fut a rögzítő")
       if (t.parked || Date.now() - (t.unparkT || 0) < 5000) continue;

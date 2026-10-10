@@ -532,7 +532,7 @@ int main(int argc, char **argv)
                 /* the viewers see stale pictures: tell them the camera is offline (repeated
                  * every 2 s like the normal status, so that the state stays fresh) */
                 if (mono() >= next_status) {
-                    live_send_status(live, 0, 0, 0);
+                    live_send_status(live, 0, 0, 0, NULL);
                     next_status = mono() + 2;
                 }
                 live_poll(live);        /* viewers may connect or leave while the camera is away */

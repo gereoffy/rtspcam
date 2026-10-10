@@ -13,7 +13,9 @@ browser decodes the H.264 itself (Media Source Extensions): no decoding or re-en
 A red frame marks a camera in alarm (its motion detector triggered), an orange one a recording
 that still runs after the alarm (post-roll), a grey "camera unreachable" overlay a camera the
 recorder cannot reach (its last pictures stay on the tile); GET /status, polled by the page
-every second (the recorders send the state every 2 s, also while the camera is away). Resolution, fps and latency are in the tile's tooltip.
+every second (the recorders send the state every 2 s, also while the camera is away). The tile's tooltip shows the resolution, the camera's own
+frame and bit rate (from the recorder), what reaches this browser, and the real delay from the camera to
+the screen (from the recorder's arrival time of the pictures; /status gives its clock).
 Pages (next to this script, read on every request): / is index.html (info/menu),
 /live is liveview.html (the grid). The same live view can run inside player.py (--live-dir DIR there):
 class Live is the shared part (/status, /live, /live/<camera>).
@@ -61,7 +63,7 @@ class Hub:
         self.init = None
         self.gop = []           # messages since the last key frame
         self.thread = None
-        self.status = None      # (alarm, recording, time received, online); only while somebody watches
+        self.status = None      # (alarm, recording, time received, online, timing or None); only while somebody watches
         self.connected = False  # reading the recorder's socket: the recorder runs
 
     def subscribe(self):
@@ -119,7 +121,9 @@ class Hub:
                     if typ == STATUS:                   # not video: kept for /status
                         if len(data) >= 2:              # older recorders send 2 bytes (no online flag)
                             online = data[2] != 0 if len(data) >= 3 else True
-                            self.status = (bool(data[0]), bool(data[1]), time.time(), online)
+                            # (+20 bytes: the newest picture's live time and arrival, the camera's rates)
+                            timing = struct.unpack(">IQII", data[3:23]) if len(data) >= 23 else None
+                            self.status = (bool(data[0]), bool(data[1]), time.time(), online, timing)
                         continue
                     with self.lock:
                         if not self.subs:
@@ -187,11 +191,14 @@ class Live:
             fresh = s is not None and now - s[2] < 15   # the recorder repeats it every 2 s (also while reconnecting)
             if fresh:
                 st[name] = {"alarm": s[0], "rec": s[1], "known": True, "online": s[3]}
+                if s[4]:        # media_ms/wall_ms: the real delay in the browser; the camera's own fps/kbit/s
+                    st[name].update(media_ms=s[4][0], wall_ms=s[4][1], cam_fps=s[4][2] / 100.0, cam_kbps=s[4][3])
             else:
                 # no recent status: if its socket is open the recorder runs but has no picture (it is
                 # connecting to a camera that answers slowly, or waits for a key frame); otherwise
                 # the recorder does not run
                 st[name] = {"alarm": False, "rec": False, "known": hub.connected, "online": False}
+        st["_now"] = now * 1000         # this machine's (= the recorders') clock, for the browser's clock offset
         return json.dumps(st).encode()
 
     def handle(self, h, path):

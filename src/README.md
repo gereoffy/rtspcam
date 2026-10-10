@@ -50,7 +50,10 @@ kockánál nincs rács. Olvasó: `mvmap.read_vec()`, `mvmap.decode_vec()`. Mére
 
 Élőkép (`--live DIR`): a felvevő a `DIR/<név>.sock` Unix socketen kiadja a kamera streamjét (fragmentált MP4, kockánként
 egy fragmens, SPS-javítással; üzenetek: `u8 típus` (1 init, 2 kulcskocka, 3 egyéb, 4 státusz: riasztás, rögzítés, kamera
-elérhető – 3 bájt, 2 s-enként és változáskor; a kamera kiesése alatt is megy, 0 „elérhető” értékkel), `u32` hossz, adat). Kapcsolódáskor az
+elérhető – 3 bájt, 2 s-enként és változáskor; a kamera kiesése alatt is megy, 0 „elérhető” értékkel; ha van kép, utána
+20 bájt időzítés: `u32` az utolsó kép ideje az élő streamben (ms), `u64` mikor érkezett a kamerától (Unix-idő, ms),
+`u32` a kamera fps×100 és `u32` kbit/s-a az utolsó ~10 s-ban – ebből mutatja az élőkép a valódi késést és a kamera saját
+értékeit), `u32` hossz, adat). Kapcsolódáskor az
 init szegmenst és az utolsó kulcskocka óta jött kockákat kapja a néző (azonnal indul), utána élőben; a lassú nézőt eldobja,
 a felvételt ez nem zavarja. A `../liveview.py` (csak standard könyvtár) kameránként EGY kapcsolattal olvassa (csak amíg
 valaki néz), és osztja szét HTTP-n a böngészőknek; az oldal rácsban mutatja a kamerákat (9 kamerával 3×3), kattintásra egy nagyban.

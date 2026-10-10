@@ -86,6 +86,13 @@ struct rc_session {
     int live_fix;
     int live_alarm, live_rec;       /* last status sent */
     double live_status_ts;
+    /* timing for the viewers' real delay and the camera's own rates (see live_timing) */
+    int64_t live_base;              /* the dts of the live stream's first picture (its time 0) */
+    int have_live_base;
+    long live_pics;                 /* pictures and bytes from the camera so far (for the rates) */
+    double live_bytes;
+    struct { double wall; long pics; double bytes; } live_rate[8];     /* samples about every 2 s */
+    int live_rate_n;
 
     /* --vectors: motion field of the current picture */
     uint8_t *vec;
@@ -107,6 +114,10 @@ static void live_packet(rc_session *s, const rc_packet *p)
     int new_init, key, r;
     if (!s->live_mux)
         s->live_mux = mp4_live_create(&s->si, s->live_fix);
+    if (s->live_mux && !s->have_live_base) {     /* (the live muxer's time 0, see mp4_write) */
+        s->have_live_base = 1;
+        s->live_base = p->dts;
+    }
     if (s->live_mux) {
         r = mp4_live_frame(s->live_mux, p, &frag, &len, &new_init, &key);
         if (new_init) {
@@ -849,16 +860,40 @@ int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_
     p.pts = pts;
     p.key = key;
     p.ts = ts;
-    if (s->live)
+    if (s->live) {
+        s->live_pics++;
+        s->live_bytes += size;
         live_packet(s, &p);
+    }
     if (s->live && (s->moving_now != s->live_alarm || (s->writer != NULL) != s->live_rec ||
                     ts - s->live_status_ts >= 2 || ts < s->live_status_ts)) {
         /* alarm/recording state for the viewers (the recording state is the one before this
-         * packet: a start or stop shows up with the next one) */
+         * packet: a start or stop shows up with the next one), with the timing: this picture's
+         * live stream time and arrival, and the camera's rates over the last ~10 s */
+        live_timing t;
+        double wall = now(), span;
+        int k;
+        if (!s->live_rate_n || wall - s->live_rate[s->live_rate_n - 1].wall >= 1.9) {
+            if (s->live_rate_n == 8) {
+                memmove(s->live_rate, s->live_rate + 1, sizeof(s->live_rate[0]) * 7);
+                s->live_rate_n--;
+            }
+            s->live_rate[s->live_rate_n].wall = wall;
+            s->live_rate[s->live_rate_n].pics = s->live_pics;
+            s->live_rate[s->live_rate_n].bytes = s->live_bytes;
+            s->live_rate_n++;
+        }
+        for (k = 0; k + 1 < s->live_rate_n && wall - s->live_rate[k + 1].wall >= 10; k++)
+            ;
+        span = wall - s->live_rate[k].wall;
+        t.media_ms = (uint32_t)llround((double)(dts - s->live_base) * s->si.tb_num * 1000 / s->si.tb_den);
+        t.wall_ms = (uint64_t)llround(wall * 1000);
+        t.fps100 = span >= 1 ? (uint32_t)llround((s->live_pics - s->live_rate[k].pics) * 100 / span) : 0;
+        t.kbps = span >= 1 ? (uint32_t)llround((s->live_bytes - s->live_rate[k].bytes) * 8 / 1000 / span) : 0;
         s->live_alarm = s->moving_now;
         s->live_rec = s->writer != NULL;
         s->live_status_ts = ts;
-        live_send_status(s->live, s->live_alarm, s->live_rec, 1);
+        live_send_status(s->live, s->live_alarm, s->live_rec, 1, &t);
     }
 
     /* --- recording state machine --- */

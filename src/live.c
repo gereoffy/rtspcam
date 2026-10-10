@@ -31,8 +31,8 @@ struct live_srv {
     bytebuf init;                   /* framed init message */
     bytebuf gop;                    /* framed messages since the last key frame */
     int gop_ok;                     /* the cache holds a whole GOP from its key frame */
-    uint8_t status[3];              /* last status: alarm, recording, online */
-    int have_status;
+    uint8_t status[23];             /* last status: alarm, recording, online [, timing] */
+    int status_len;                 /* 0: none yet */
     client c[MAX_CLIENTS];
     int n;
 };
@@ -129,18 +129,26 @@ void live_send_frame(live_srv *l, const uint8_t *frag, size_t len, int key)
     }
 }
 
-void live_send_status(live_srv *l, int alarm, int recording, int online)
+void live_send_status(live_srv *l, int alarm, int recording, int online, const live_timing *t)
 {
-    uint8_t msg[8];
+    bytebuf b = { 0 };
     l->status[0] = alarm ? 1 : 0;
     l->status[1] = recording ? 1 : 0;
     l->status[2] = online ? 1 : 0;
-    l->have_status = 1;
-    msg[0] = 4;
-    msg[1] = msg[2] = msg[3] = 0;
-    msg[4] = 3;
-    memcpy(msg + 5, l->status, 3);
-    queue_all(l, msg, sizeof(msg));
+    l->status_len = 3;
+    if (t) {
+        uint8_t *p = l->status + 3;
+        int i;
+        for (i = 0; i < 4; i++) p[i] = (uint8_t)(t->media_ms >> (24 - 8 * i));
+        for (i = 0; i < 8; i++) p[4 + i] = (uint8_t)(t->wall_ms >> (56 - 8 * i));
+        for (i = 0; i < 4; i++) p[12 + i] = (uint8_t)(t->fps100 >> (24 - 8 * i));
+        for (i = 0; i < 4; i++) p[16 + i] = (uint8_t)(t->kbps >> (24 - 8 * i));
+        l->status_len = 23;
+    }
+    put_msg(&b, 4, l->status, l->status_len);
+    if (!b.err)
+        queue_all(l, b.d, b.len);
+    bb_free(&b);
 }
 
 void live_poll(live_srv *l)
@@ -177,8 +185,8 @@ void live_poll(live_srv *l)
             if (l->gop_ok)
                 bb_put(&l->c[l->n].q, l->gop.d, l->gop.len);
         }
-        if (l->have_status)
-            put_msg(&l->c[l->n].q, 4, l->status, 3);
+        if (l->status_len)
+            put_msg(&l->c[l->n].q, 4, l->status, l->status_len);
         log_info("live viewer %d connected", fd);
         l->n++;
     }
