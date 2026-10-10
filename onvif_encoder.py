@@ -152,7 +152,8 @@ def describe_options(cam, tok):
                                                      r"<Height>(\d+)</Height>", h)) or "?"
     ext = re.search(r"<Extension>.*?<H264>(.*?)</H264>", text, re.S)       # (Media 1 extension: the bit rate range)
     bitrate = rng(ext.group(1), "BitrateRange") if ext else "?"
-    return ("%s\n    resolutions: %s\n    fps %s · GOP %s · quality %s · bitrate %s kbit/s · profiles %s" % (
+    # (plain ASCII: the small site PC's terminal and Python 3.5 cannot print anything else)
+    return ("%s\n    resolutions: %s\n    fps %s, GOP %s, quality %s, bitrate %s kbit/s, profiles %s" % (
         tok, res, rng(h, "FrameRateRange"), rng(h, "GovLengthRange"), rng(text, "QualityRange"),
         bitrate, ", ".join(re.findall(r"<H264ProfilesSupported>([^<]*)<", h)) or "?"))
 
