@@ -3,6 +3,9 @@
 
     onvif_encoder.py CAMERA get
     onvif_encoder.py CAMERA options       (what the camera allows: resolutions, fps, GOP, quality per stream)
+    onvif_encoder.py CAMERA time          (the camera's clock, time zone, DST flag; against this machine)
+    onvif_encoder.py CAMERA settime --tz "CET-1CEST,M3.5.0,M10.5.0/3"   (zone with DST rules)
+    onvif_encoder.py CAMERA settime --fixed   (this machine's current offset: for cameras without DST rules, daily)
     onvif_encoder.py CAMERA set [--token VideoEncoder000] [--width 1920 --height 1080] [--fps 15]
                                 [--bitrate 2048] [--quality 5] [--gop 30] [--profile Main]
 
@@ -165,6 +168,97 @@ def set_value(xml, name, value):
     return new
 
 
+# ---------------------------------------------------------------- the camera's clock
+
+HU_TZ = "CET-1CEST,M3.5.0,M10.5.0/3"     # POSIX: Central European time with its DST rules
+
+
+def get_time(cam):
+    """the camera's date/time settings (GetSystemDateAndTime): a dict, prefixes stripped"""
+    t = re.sub(r"<(/?)[\w-]+:", r"<\1", cam.call("/onvif/device_service", "<tds:GetSystemDateAndTime/>"))
+
+    def dt(name):
+        m = re.search(r"<%s>.*?<Hour>(\d+)</Hour>\s*<Minute>(\d+)</Minute>\s*<Second>(\d+)</Second>.*?"
+                      r"<Year>(\d+)</Year>\s*<Month>(\d+)</Month>\s*<Day>(\d+)</Day>" % name, t, re.S)
+        if not m:
+            return None
+        h, mi, s, y, mo, d = map(int, m.groups())
+        return datetime.datetime(y, mo, d, h, mi, s)
+
+    def val(name):
+        m = re.search(r"<%s>([^<]*)</%s>" % (name, name), t)
+        return m.group(1).strip() if m else None
+    return {"type": val("DateTimeType"), "dst": val("DaylightSavings"), "tz": val("TZ"),
+            "utc": dt("UTCDateTime"), "local": dt("LocalDateTime")}
+
+
+def tz_offset_min(tz):
+    """east-positive minutes of a fixed time zone string: "GMT+01:00" (Dahua/Imou) or POSIX "CET-1"/"UTC-2"
+    (POSIX counts west-positive); None if it is not a simple fixed offset"""
+    m = re.match(r"^(?:GMT|UTC)([+-])(\d{1,2}):(\d{2})$", tz or "")         # (Dahua style: always hh:mm)
+    if m:
+        return (1 if m.group(1) == "+" else -1) * (int(m.group(2)) * 60 + int(m.group(3)))
+    m = re.match(r"^[A-Za-z]{3,}([+-]?)(\d{1,2})(?::(\d{2}))?$", tz or "")
+    if m:
+        return (-1 if m.group(1) != "-" else 1) * (int(m.group(2)) * 60 + int(m.group(3) or 0))
+    return None
+
+
+def fixed_tz(offset_min, like):
+    """the fixed zone for offset_min written the way the camera writes its own (like)"""
+    sign, a = ("+" if offset_min >= 0 else "-"), abs(offset_min)
+    if re.match(r"^(GMT|UTC)[+-]\d{1,2}:\d{2}$", like or ""):
+        return "%s%s%02d:%02d" % (like[:3], sign, a // 60, a % 60)
+    name = {60: "CET", 120: "CEST"}.get(offset_min, "LOC")       # POSIX: the sign counts west-positive
+    return "%s%s%d%s" % (name, "-" if offset_min >= 0 else "+", a // 60, ":%02d" % (a % 60) if a % 60 else "")
+
+
+def describe_time(cam):
+    tm = get_time(cam)
+    now_utc = datetime.datetime.utcnow()
+    host_off = int(round((datetime.datetime.now() - now_utc).total_seconds() / 60.0))
+    lines = ["mode %s, daylight saving flag %s, time zone %s" % (tm["type"], tm["dst"], tm["tz"])]
+    if tm["utc"]:
+        lines.append("camera UTC   %s  (this machine: %+.0f s)" % (tm["utc"], (tm["utc"] - now_utc).total_seconds()))
+    local, how = tm["local"], ""
+    if not local and tm["utc"]:
+        off = tz_offset_min(tm["tz"])
+        if off is not None:              # (no local time reported: from the zone, + 1 h with the DST flag)
+            off += 60 if (tm["dst"] or "").lower() == "true" else 0
+            local, how = tm["utc"] + datetime.timedelta(minutes=off), " (computed from the zone)"
+    if local:
+        lines.append("camera local %s%s  (this machine's local time: %+.0f s)" % (
+            local, how, (local - (now_utc + datetime.timedelta(minutes=host_off))).total_seconds()))
+    lines.append("this machine: UTC%+d:%02d" % (host_off // 60 if host_off >= 0 else -(-host_off // 60), abs(host_off) % 60))
+    return "\n".join(lines)
+
+
+def set_time(cam, tz=None, fixed=False, dst=None):
+    """SetSystemDateAndTime keeping the mode (NTP/manual) and, for NTP, leaving the clock alone. fixed: the zone
+    is this machine's current offset (winter +1, summer +2), the DST flag off, manual mode with this machine's
+    time, written every time: for cameras that get DST wrong (run it daily from cron). Otherwise it writes
+    only when something differs."""
+    tm = get_time(cam)
+    mode = tm["type"] or "NTP"
+    if fixed:       # manual mode, always written: the clock is set every time (cron), no NTP, no DST rules
+        host_off = int(round((datetime.datetime.now() - datetime.datetime.utcnow()).total_seconds() / 60.0))
+        tz, dst, mode = fixed_tz(host_off, tm["tz"]), False, "Manual"
+    new_tz = tz if tz is not None else tm["tz"]
+    new_dst = dst if dst is not None else (tm["dst"] or "").lower() == "true"
+    if not fixed and new_tz == tm["tz"] and new_dst == ((tm["dst"] or "").lower() == "true"):
+        return False
+    body = ("<tds:SetSystemDateAndTime><tds:DateTimeType>%s</tds:DateTimeType><tds:DaylightSavings>%s"
+            "</tds:DaylightSavings><tds:TimeZone><tt:TZ>%s</tt:TZ></tds:TimeZone>" % (
+                mode, "true" if new_dst else "false", new_tz))
+    if mode.lower() == "manual":
+        u = datetime.datetime.utcnow()       # (manual: the time must be given too; this machine's, NTP-synced)
+        body += ("<tds:UTCDateTime><tt:Time><tt:Hour>%d</tt:Hour><tt:Minute>%d</tt:Minute><tt:Second>%d</tt:Second>"
+                 "</tt:Time><tt:Date><tt:Year>%d</tt:Year><tt:Month>%d</tt:Month><tt:Day>%d</tt:Day></tt:Date>"
+                 "</tds:UTCDateTime>" % (u.hour, u.minute, u.second, u.year, u.month, u.day))
+    cam.call("/onvif/device_service", body + "</tds:SetSystemDateAndTime>")
+    return True
+
+
 def camera_from(arg, cameras_file):
     url = arg
     if not arg.startswith("rtsp://"):
@@ -186,8 +280,15 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("camera", help="rtsp://user:password@host/... or a name from cameras.url")
-    ap.add_argument("action", choices=["get", "set", "options"],
-                    help="get: the settings; set: change them; options: what the camera allows per stream")
+    ap.add_argument("action", choices=["get", "set", "options", "time", "settime"],
+                    help="get: the settings; set: change them; options: what the camera allows per stream; "
+                         "time: the camera's clock and time zone; settime: set the time zone (--tz, --fixed, --dst)")
+    ap.add_argument("--tz", help="settime: time zone, e.g. %s (POSIX, with the DST rules: for cameras that "
+                                 "follow them) or GMT+01:00" % HU_TZ)
+    ap.add_argument("--fixed", action="store_true", help="settime: this machine's current offset (winter +1, "
+                    "summer +2) as a fixed zone, DST flag off, manual mode with this machine's time (written every "
+                    "run): for cameras that get DST wrong; run it daily from cron")
+    ap.add_argument("--dst", choices=["on", "off"], help="settime: the daylight saving flag")
     ap.add_argument("--cameras", default=os.path.join(here, "cameras.url"))
     ap.add_argument("--port", type=int, help="ONVIF HTTP port (default: try %s)" % ", ".join(map(str, PORTS)))
     ap.add_argument("--no-auth", action="store_true", help="send the requests without the user name token")
@@ -219,6 +320,20 @@ def main():
         sys.exit("ONVIF error: %s" % "; ".join(errors))
     if not a.port and cam.port != PORTS[0]:
         print("note: ONVIF on port %d" % cam.port, file=sys.stderr)
+    if a.action in ("time", "settime"):
+        try:
+            if a.action == "settime":
+                if not (a.tz or a.fixed or a.dst):
+                    sys.exit("settime: give --tz, --fixed or --dst")
+                print("before:", describe_time(cam).replace("\n", "\n        "))
+                changed = set_time(cam, tz=a.tz, fixed=a.fixed, dst=None if a.dst is None else a.dst == "on")
+                print("after: " if changed else "nothing to change", describe_time(cam).replace("\n", "\n        ")
+                      if changed else "")
+            else:
+                print(describe_time(cam))
+        except (OSError, RuntimeError) as e:
+            sys.exit("ONVIF error: %s" % e)
+        return
     if not confs:
         sys.exit("the camera reported no video encoder configuration")
     if a.action == "get":
