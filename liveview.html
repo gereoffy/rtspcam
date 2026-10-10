@@ -13,7 +13,7 @@
   .tile { overflow: hidden; }
   .tile.zoomed { cursor: grab; touch-action: none; } .tile.panning { cursor: grabbing; }
   .lbl { position: absolute; left: 4px; top: 4px; background: rgba(0,0,0,.55); padding: 2px 6px; border-radius: 4px;
-         font: 12px ui-monospace, monospace; pointer-events: none; display: none; }
+         font: 12px ui-monospace, monospace; pointer-events: none; display: none; white-space: pre-line; }
   .tile.nopic .lbl { display: block; }        /* text only on a tile without a picture */
   .lbl .st { color: var(--muted); } .lbl .bad { color: var(--bad); }
   /* hover bar: camera name, state and the link to the recordings; only while the mouse is over the tile, the picture itself stays clean */
@@ -21,7 +21,7 @@
          background: linear-gradient(rgba(0,0,0,.75), rgba(0,0,0,0)); font: 15px ui-monospace, monospace; z-index: 2; }
   .tile:hover .bar { display: flex; }
   .tile:hover .lbl { display: none; }          /* the bar says the same */
-  .bar .nm { font-weight: 700; } .bar .st { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cfd3d8; }
+  .bar .nm { font-weight: 700; } .bar .st { flex: 1; min-width: 0; overflow: hidden; white-space: pre-line; color: #cfd3d8; }   /* (two lines: camera / here) */
   .bar .st.bad { color: var(--bad); }
   .bar a { color: #fff; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 5px; padding: 3px 10px; text-decoration: none; white-space: nowrap; }
   .bar a:hover { border-color: #8ab4f8; color: #8ab4f8; }
@@ -255,7 +255,7 @@ class Tile {
       const c = this.cam;
       if (c && clockOff !== null) {
         delay = Math.max(0, (Date.now() + clockOff - c.wall_ms + (c.media_ms - v.currentTime * 1000)) / 1000);
-        here = `kamera ${f1(c.cam_fps)} fps ${c.cam_kbps} kbit/s · itt `;
+        here = `kamera ${f1(c.cam_fps)} fps ${c.cam_kbps} kbit/s\nitt `;     // (two lines: the bar is narrow)
       }
       this.status(`${v.videoWidth}x${v.videoHeight} · ${here}${f1(fps)} fps ${kbps.toFixed(0)} kbit/s · késés ${delay.toFixed(1)} s` +
                   (this.reconnects ? ` · újracsatlakozott ${this.reconnects}×` : '') +
