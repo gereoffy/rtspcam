@@ -2,6 +2,7 @@
 """onvif_encoder - read or set a camera's video encoder settings over ONVIF (standard library only).
 
     onvif_encoder.py CAMERA get
+    onvif_encoder.py CAMERA options       (what the camera allows: resolutions, fps, GOP, quality per stream)
     onvif_encoder.py CAMERA set [--token VideoEncoder000] [--width 1920 --height 1080] [--fps 15]
                                 [--bitrate 2048] [--quality 5] [--gop 30] [--profile Main]
 
@@ -130,6 +131,32 @@ def describe(tok, xml):
         tag(xml, "FrameRateLimit"), tag(xml, "BitrateLimit"), q, tag(xml, "GovLength"), tag(xml, "H264Profile"))
 
 
+def describe_options(cam, tok):
+    """what the camera allows for one encoder configuration (GetVideoEncoderConfigurationOptions): H.264
+    resolutions, frame rate, GOP, quality, profiles, and the bit rate range if it tells it"""
+    body = ("<trt:GetVideoEncoderConfigurationOptions><trt:ConfigurationToken>%s</trt:ConfigurationToken>"
+            "</trt:GetVideoEncoderConfigurationOptions>" % tok)
+    try:
+        text = cam.call(cam.media, body)
+    except RuntimeError:                    # some cameras answer only without a token (then for all streams)
+        text = cam.call(cam.media, "<trt:GetVideoEncoderConfigurationOptions/>")
+    text = re.sub(r"<(/?)[\w-]+:", r"<\1", text)            # (the prefixes differ by camera)
+
+    def rng(xml, name):
+        m = re.search(r"<%s>\s*<Min>([^<]*)</Min>\s*<Max>([^<]*)</Max>" % name, xml)
+        return "%s-%s" % (m.group(1), m.group(2)) if m else "?"
+
+    h264 = re.search(r"<H264>(.*?)</H264>", text, re.S)
+    h = h264.group(1) if h264 else ""
+    res = ", ".join("%sx%s" % m for m in re.findall(r"<ResolutionsAvailable>\s*<Width>(\d+)</Width>\s*"
+                                                     r"<Height>(\d+)</Height>", h)) or "?"
+    ext = re.search(r"<Extension>.*?<H264>(.*?)</H264>", text, re.S)       # (Media 1 extension: the bit rate range)
+    bitrate = rng(ext.group(1), "BitrateRange") if ext else "?"
+    return ("%s\n    resolutions: %s\n    fps %s · GOP %s · quality %s · bitrate %s kbit/s · profiles %s" % (
+        tok, res, rng(h, "FrameRateRange"), rng(h, "GovLengthRange"), rng(text, "QualityRange"),
+        bitrate, ", ".join(re.findall(r"<H264ProfilesSupported>([^<]*)<", h)) or "?"))
+
+
 def set_value(xml, name, value):
     new, n = re.subn(r"(<tt:%s>)(.*?)(</tt:%s>)" % (name, name), r"\g<1>%s\g<3>" % value, xml, count=1, flags=re.S)
     if not n:
@@ -158,7 +185,8 @@ def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("camera", help="rtsp://user:password@host/... or a name from cameras.url")
-    ap.add_argument("action", choices=["get", "set"])
+    ap.add_argument("action", choices=["get", "set", "options"],
+                    help="get: the settings; set: change them; options: what the camera allows per stream")
     ap.add_argument("--cameras", default=os.path.join(here, "cameras.url"))
     ap.add_argument("--port", type=int, help="ONVIF HTTP port (default: try %s)" % ", ".join(map(str, PORTS)))
     ap.add_argument("--no-auth", action="store_true", help="send the requests without the user name token")
@@ -195,6 +223,13 @@ def main():
     if a.action == "get":
         for tok, xml in confs:
             print(describe(tok, xml))
+        return
+    if a.action == "options":
+        for tok, _ in confs:
+            try:
+                print(describe_options(cam, tok))
+            except (OSError, RuntimeError) as e:
+                print("%s\n    options: ONVIF error: %s" % (tok, e))
         return
 
     tok, xml = next(((t, x) for t, x in confs if t == a.token), (None, None)) if a.token else confs[0]
