@@ -67,3 +67,7 @@ Ha nem fut a rögzítő (nincs socket, vagy nem jelentkezik), az oldal „Hiba: 
 
 A rögzítőt `--live DIR`-rel kell indítani (kameránként egy `DIR/<kamera>.sock`). Ugyanez önálló szerverként is megy a lejátszó nélkül:
 `python3 liveview.py --live-dir DIR [--host 0.0.0.0] [--port 8781] [--cameras a,b,c]` (közös rész: `liveview.Live`).
+
+## Kamerabeállítás ONVIF-en
+Az `onvif_encoder.py` önálló segédprogram (csak standard könyvtár): a kamera kódolóbeállításai (felbontás, fps, bitráta, minőség) és órája,
+időzónája ONVIF-en, webes felület nélkül is. Leírás: [ONVIF.md](ONVIF.md).

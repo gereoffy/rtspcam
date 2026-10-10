@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """onvif_encoder - read or set a camera's video encoder settings over ONVIF (standard library only).
 
+    onvif_encoder.py CAMERA url           (the RTSP URLs of the streams: for a new camera, e.g. user:password@192.168.1.64)
     onvif_encoder.py CAMERA get
     onvif_encoder.py CAMERA options       (what the camera allows: resolutions, fps, GOP, quality per stream)
     onvif_encoder.py CAMERA time          (the camera's clock, time zone, DST flag; against this machine)
@@ -9,8 +10,12 @@
     onvif_encoder.py CAMERA set [--token VideoEncoder000] [--width 1920 --height 1080] [--fps 15]
                                 [--bitrate 2048] [--quality 5] [--gop 30] [--profile Main]
 
-CAMERA is an rtsp://user:password@host/... URL (host and credentials are taken from it) or a
-camera name from cameras.url ("<name> <rtsp url>" per line, next to this script or --cameras).
+CAMERA is an rtsp://user:password@host/... URL (host and credentials are taken from it), a
+camera name from cameras.url ("<name> <rtsp url>" per line, next to this script or --cameras),
+user:password@host, or just the host (address or name; the user name and password then come
+from --user/--password, without them the requests go unauthenticated). cameras.url is optional.
+For a new camera `url` tells the RTSP URLs.
+
 Without --token, `set` changes the first encoder (normally the main stream). Settings that are
 not given stay as they are. The change is made persistent on the camera (ForcePersistence).
 
@@ -35,7 +40,7 @@ import os
 import re
 import socket
 import sys
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 NS = ('xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tt="http://www.onvif.org/ver10/schema" '
       'xmlns:trt="http://www.onvif.org/ver10/media/wsdl" xmlns:tds="http://www.onvif.org/ver10/device/wsdl"')
@@ -291,29 +296,87 @@ def set_time(cam, tz=None, fixed=False, dst=None):
     raise RuntimeError("\n".join(errors))
 
 
-def camera_from(arg, cameras_file):
-    url = arg
-    if not arg.startswith("rtsp://"):
-        try:
-            lines = open(cameras_file).read().splitlines()
-        except OSError:
-            sys.exit("cannot read %s" % cameras_file)
-        found = [l.split(None, 1)[1].strip() for l in lines if l.split(None, 1)[:1] == [arg]]
-        if not found:
-            sys.exit("camera %s not found in %s" % (arg, cameras_file))
-        url = found[0]
+def camera_from(arg, cameras_file, user=None, password=None):
+    """CAMERA: an rtsp:// URL, user:password@host, a name in cameras.url, or a host (address or DNS name; without
+    credentials unless --user/--password). --user/--password win."""
+    try:
+        entries = [l.split(None, 1) for l in open(cameras_file).read().splitlines()]
+        entries = [(e[0], e[1].strip()) for e in entries if len(e) == 2 and not e[0].startswith("#")]
+    except OSError:
+        entries = []                    # (no cameras.url: fine, give the camera as host or URL)
+    if arg.startswith("rtsp://"):
+        url = arg
+    elif "@" in arg:
+        url = "rtsp://" + arg           # user:password@host: a camera not in cameras.url yet
+    else:
+        found = [u for n, u in entries if n == arg]
+        if not found:                   # (not a name: a host)
+            try:
+                socket.getaddrinfo(arg.strip("[]"), None)
+            except (socket.gaierror, UnicodeError):
+                sys.exit("%s: not a camera in %s and not a host" % (arg, cameras_file))
+        url = found[0] if found else "rtsp://" + arg
     u = urlsplit(url)
-    if not u.username:
-        sys.exit("the URL has no user name/password")
-    return Camera(u.hostname, 80, unquote(u.username), unquote(u.password or ""))
+    if not u.hostname:
+        sys.exit("no camera address in %s" % arg)
+    cam = Camera(u.hostname, 80, user if user is not None else unquote(u.username or ""),
+                 password if password is not None else unquote(u.password or ""))
+    if not cam.user:
+        cam.auth = False
+    return cam
+
+
+def stream_urls(cam):
+    """[(profile token, name, "H264 1920x1080 15 fps", rtsp url with the credentials)] (GetProfiles, GetStreamUri)"""
+    text = cam.call(cam.media, "<trt:GetProfiles/>")
+    out = []
+    for m in re.finditer(r"<(\w+:)?Profiles\b([^>]*)>(.*?)</\1?Profiles>", text, re.S):
+        tok = re.search(r'token="([^"]+)"', m.group(2))
+        if not tok:
+            continue
+        x = re.sub(r"<(/?)[\w-]+:", r"<\1", m.group(3))
+
+        def val(path):
+            r = re.search(path, x, re.S)
+            return r.group(1).strip() if r else None
+        name = val(r"^\s*<Name>([^<]*)</Name>") or val(r"<Name>([^<]*)</Name>") or ""
+        vec = val(r"<VideoEncoderConfiguration\b[^>]*>(.*?)</VideoEncoderConfiguration>") or ""
+        enc = re.search(r"<Encoding>([^<]*)</Encoding>", vec)
+        w, h = re.search(r"<Width>(\d+)</Width>", vec), re.search(r"<Height>(\d+)</Height>", vec)
+        fps = re.search(r"<FrameRateLimit>(\d+)</FrameRateLimit>", vec)
+        info = " ".join(p for p in [enc and enc.group(1), w and h and "%sx%s" % (w.group(1), h.group(1)),
+                                    fps and fps.group(1) + " fps"] if p) or "(no video encoder)"
+        try:
+            r = cam.call(cam.media, "<trt:GetStreamUri><trt:StreamSetup><tt:Stream>RTP-Unicast</tt:Stream><tt:Transport>"
+                         "<tt:Protocol>RTSP</tt:Protocol></tt:Transport></trt:StreamSetup><trt:ProfileToken>%s"
+                         "</trt:ProfileToken></trt:GetStreamUri>" % tok.group(1))
+        except RuntimeError as e:
+            out.append((tok.group(1), name, info, "(GetStreamUri: %s)" % e))
+            continue
+        uri = re.search(r"<(?:\w+:)?Uri>\s*([^<]*?)\s*</(?:\w+:)?Uri>", r)
+        uri = (uri.group(1) if uri else "").replace("&amp;", "&")
+        u = urlsplit(uri)
+        if u.scheme == "rtsp" and u.hostname:
+            port = ":%d" % u.port if u.port else ""
+            if u.hostname != cam.host:  # (cheap firmware reports its factory address): the one we reached
+                print("note: profile %s: the camera says host %s, %s used instead" % (tok.group(1), u.hostname, cam.host),
+                      file=sys.stderr)
+            cred = ""
+            if cam.user:
+                cred = quote(cam.user, safe="") + (":" + quote(cam.password, safe="") if cam.password else "") + "@"
+            host = "[%s]" % cam.host if ":" in cam.host else cam.host
+            uri = "rtsp://%s%s%s%s" % (cred, host, port, uri[uri.index(u.netloc) + len(u.netloc):])
+        out.append((tok.group(1), name, info, uri or "(no URI)"))
+    return out
 
 
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("camera", help="rtsp://user:password@host/... or a name from cameras.url")
-    ap.add_argument("action", choices=["get", "set", "options", "time", "settime"],
-                    help="get: the settings; set: change them; options: what the camera allows per stream; "
+    ap.add_argument("camera", help="rtsp://user:password@host/..., user:password@host, a name from cameras.url "
+                    "or just the host (with --user/--password)")
+    ap.add_argument("action", choices=["url", "get", "set", "options", "time", "settime"],
+                    help="url: the RTSP URLs of the streams; get: the settings; set: change them; options: what the camera allows per stream; "
                          "time: the camera's clock and time zone; settime: set the time zone (--tz, --fixed, --dst)")
     ap.add_argument("--tz", help="settime: time zone, e.g. %s (POSIX, with the DST rules: for cameras that "
                                  "follow them) or GMT+01:00" % HU_TZ)
@@ -322,6 +385,8 @@ def main():
                     "run): for cameras that get DST wrong; run it daily from cron")
     ap.add_argument("--dst", choices=["on", "off"], help="settime: the daylight saving flag")
     ap.add_argument("--cameras", default=os.path.join(here, "cameras.url"))
+    ap.add_argument("--user", help="ONVIF user name (instead of the one in the URL / cameras.url)")
+    ap.add_argument("--password", help="ONVIF password")
     ap.add_argument("--port", type=int, help="ONVIF HTTP port (default: try %s)" % ", ".join(map(str, PORTS)))
     ap.add_argument("--no-auth", action="store_true", help="send the requests without the user name token")
     ap.add_argument("--token", help="encoder configuration to change (default: the first one)")
@@ -335,7 +400,7 @@ def main():
                     "rate (VBR) this sets how much the picture gets, the bit rate is only the upper limit")
     a = ap.parse_args()
 
-    cam = camera_from(a.camera, a.cameras)
+    cam = camera_from(a.camera, a.cameras, a.user, a.password)
     if a.no_auth:
         cam.auth = False
     errors = []
@@ -349,9 +414,21 @@ def main():
             errors.append("port %d: %s" % (port, e))
             cam.auth = False if a.no_auth else None
     else:
+        if not cam.user and any(" 401 " in e or "uthoriz" in e for e in errors):
+            sys.exit("the camera needs a user name and password: give user:password@%s or --user/--password" % a.camera)
         sys.exit("ONVIF error: %s" % "; ".join(errors))
     if not a.port and cam.port != PORTS[0]:
         print("note: ONVIF on port %d" % cam.port, file=sys.stderr)
+    if a.action == "url":
+        try:
+            urls = stream_urls(cam)
+        except (OSError, RuntimeError) as e:
+            sys.exit("ONVIF error: %s" % e)
+        if not urls:
+            sys.exit("the camera reported no media profile")
+        for tok, name, info, uri in urls:
+            print("%s (%s): %s\n    %s" % (tok, name, info, uri))
+        return
     if a.action in ("time", "settime"):
         try:
             if a.action == "settime":
