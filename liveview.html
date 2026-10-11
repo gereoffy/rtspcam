@@ -23,7 +23,10 @@
   .tile:hover .lbl { display: none; }          /* the bar says the same */
   .bar .nm { font-weight: 700; } .bar .st { flex: 1; min-width: 0; overflow: hidden; white-space: pre-line; color: #cfd3d8; }   /* (two lines: camera / here) */
   .bar .st.bad { color: var(--bad); }
-  .bar a { color: #fff; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 5px; padding: 3px 10px; text-decoration: none; white-space: nowrap; }
+  /* the details (resolution, rates, delay, connection messages) only for whoever asks: key "i" or ?info (Tile.status
+     still fills them); without them a tile with no picture shows only its name (and the unreachable/no recorder overlay) */
+  body:not(.info) .bar .st, body:not(.info) .lbl span { display: none; }
+  .bar a { margin-left: auto; color: #fff; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 5px; padding: 3px 10px; text-decoration: none; white-space: nowrap; }
   .bar a:hover { border-color: #8ab4f8; color: #8ab4f8; }
   #err { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%); background: rgba(40,10,10,.92); border: 1px solid var(--bad);
          color: #ffb4a8; padding: 14px 22px; border-radius: 8px; font-size: 16px; text-align: center; display: none; z-index: 5; }
@@ -274,6 +277,21 @@ class Tile {
 const err = document.getElementById('err'), t0 = Date.now();
 if (!cams.length) { err.textContent = 'Hiba: nem fut a rögzítő (nincs élőkép-csatorna)'; err.style.display = 'block'; }
 const tiles = cams.map(c => new Tile(c));
+// the details on the tiles: off by default (only the name and the recordings button); the "i" key toggles them, /live?info
+// turns them on, ?info=0 off; remembered in this browser
+function setInfo(on) {
+  document.body.classList.toggle('info', on);
+  try { localStorage.setItem('liveinfo', on ? '1' : '0'); } catch (e) {}
+}
+{
+  const q = new URLSearchParams(location.search).get('info');
+  let on = false;
+  try { on = localStorage.getItem('liveinfo') === '1'; } catch (e) {}
+  setInfo(q !== null ? q !== '0' : on);
+}
+addEventListener('keydown', e => {
+  if (e.key === 'i' && !e.ctrlKey && !e.metaKey && !e.altKey) setInfo(!document.body.classList.contains('info'));
+});
 viewFromUrl();                                          // /live#name opens that camera large
 setInterval(() => tiles.forEach(t => t.tick()), 1000);
 // alarm (red frame) and recording (REC) state of the recorders
