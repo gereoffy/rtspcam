@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="hu"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Élőkép</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+  :root { --bg: #111318; --fg: #e8eaed; --muted: #9aa0a6; --ok: #35c46a; --bad: #ff6b4d; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 16px system-ui, sans-serif; }
+  /* the list of the cameras */
+  #list { padding: max(12px, env(safe-area-inset-top)) 12px 12px; }
+  h1 { font-size: 18px; margin: 4px 4px 12px; color: var(--muted); font-weight: 600; }
+  #list button { display: flex; align-items: center; gap: 12px; width: 100%; margin: 0 0 10px; padding: 16px 18px; border-radius: 10px;
+         background: #1d2027; color: var(--fg); border: 1px solid #2c3039; font: 600 19px system-ui, sans-serif; text-align: left; }
+  #list button::before { content: ''; width: 12px; height: 12px; border-radius: 50%; background: var(--ok); flex: none; }
+  #list button.rec::before { background: #ff9f1a; } #list button.alarm::before { background: #ff3b30; }
+  #list button.away { color: var(--muted); } #list button.away::before { background: #555; }
+  #list button.unk::before { background: none; border: 2px solid #555; width: 8px; height: 8px; }   /* (state known only while watched) */
+  #list button small { margin-left: auto; font: 13px system-ui, sans-serif; color: var(--muted); }
+  #err { color: var(--bad); margin: 8px 4px; }
+  /* one camera on the whole screen */
+  #view { display: none; position: fixed; inset: 0; background: #000; }
+  body.watching #view { display: block; } body.watching #list { display: none; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .bar { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 10px;
+         padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 22px max(10px, env(safe-area-inset-left));
+         background: linear-gradient(rgba(0,0,0,.75), rgba(0,0,0,0)); }
+  #view.nobar .bar { display: none; }
+  #back { font-size: 20px; padding: 2px 14px; }
+  .bar a { color: #fff; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 6px; padding: 6px 12px;
+           text-decoration: none; white-space: nowrap; }
+  #name { font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #msg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,.7); border: 1px solid var(--muted);
+         color: #ddd; padding: 8px 16px; border-radius: 6px; text-align: center; display: none; }
+  #view.alarm { outline: 4px solid #ff3b30; outline-offset: -4px; } #view.rec { outline: 4px solid #ff9f1a; outline-offset: -4px; }
+</style></head><body>
+<div id="list"><h1>Élőkép</h1><div id="err"></div></div>
+<div id="view">
+  <video muted autoplay playsinline></video>
+  <div class="bar"><a id="back" href="#" title="vissza a kamerákhoz">←</a><span id="name"></span><a id="rec">▶ Felvételek</a></div>
+  <div id="msg"></div>
+</div>
+<script>
+// Phone view of the live cameras (/m): the list of the cameras, a tap shows that one alone on the whole screen; only
+// that camera's stream runs (/live/<camera>, fragmented MP4 into Media Source Extensions, the same as the grid /live).
+// The phone's back gesture (or ← Kamerák) returns to the list; a tap on the picture hides/shows the top bar.
+const cams = __CAMS__;
+const MSClass = window.MediaSource || window.ManagedMediaSource;     // iPhone: only ManagedMediaSource (iOS 17.1+)
+const list = document.getElementById('list'), view = document.getElementById('view'), v = view.querySelector('video');
+const msg = document.getElementById('msg'), errEl = document.getElementById('err');
+const btns = {};
+for (const c of cams) {
+  const b = btns[c] = document.createElement('button');
+  b.textContent = c; b.append(document.createElement('small'));
+  b.onclick = () => { history.pushState({cam: c}, '', '#' + encodeURIComponent(c)); show(c); };
+  list.append(b);
+}
+if (!cams.length) errEl.textContent = 'Hiba: nem fut a rögzítő (nincs élőkép-csatorna)';
+document.getElementById('back').onclick = e => {
+  e.preventDefault();
+  if (history.state && history.state.cam) history.back();          // (the same as the back gesture)
+  else { history.replaceState(null, '', location.pathname); show(null); }
+};
+v.onclick = () => view.classList.toggle('nobar');
+addEventListener('popstate', fromUrl);
+function fromUrl() { const c = decodeURIComponent(location.hash.slice(1)); show(cams.includes(c) ? c : null); }
+
+let cur = null, ac = null, sb = null, q = [], retry = null, lastPic = 0, lastFrames = -1, lastEnd = 0, stuck = 0, away = '';
+function say(t) { msg.textContent = t; msg.style.display = t ? 'block' : 'none'; }
+function show(c) {
+  if (c === cur) return;
+  stop(); cur = c;
+  document.body.classList.toggle('watching', !!c);
+  if (!c) return;
+  document.getElementById('name').textContent = c;
+  document.getElementById('rec').href = '/player/' + encodeURIComponent(c);
+  view.classList.remove('nobar', 'alarm', 'rec');
+  away = ''; say('kapcsolódás…'); start();
+}
+function stop() {
+  clearTimeout(retry); if (ac) ac.abort(); ac = null; sb = null; q = [];
+  if (v.src) { URL.revokeObjectURL(v.src); v.removeAttribute('src'); v.load(); }
+}
+function initEnd(buf) {              // end of the moov box (the init segment) once it is complete, else 0
+  let o = 0;
+  while (o + 8 <= buf.length) {
+    const size = ((buf[o] << 24) >>> 0) + (buf[o+1] << 16) + (buf[o+2] << 8) + buf[o+3];
+    const type = String.fromCharCode(buf[o+4], buf[o+5], buf[o+6], buf[o+7]);
+    if (size < 8 || o + size > buf.length) return 0;
+    o += size;
+    if (type === 'moov') return o;
+  }
+  return 0;
+}
+function codecOf(buf) {               // avc1.PPCCLL from the avcC box of the init segment
+  for (let i = 4; i + 8 < buf.length; i++)
+    if (buf[i] === 0x61 && buf[i+1] === 0x76 && buf[i+2] === 0x63 && buf[i+3] === 0x43)
+      return 'avc1.' + [buf[i+5], buf[i+6], buf[i+7]].map(x => x.toString(16).padStart(2, '0')).join('');
+  return 'avc1.4d0028';
+}
+function open(codec) {
+  return new Promise((res, rej) => {
+    if (!MSClass) return rej(new Error('ez a böngésző nem tud élőképet (iPhone: iOS 17.1 vagy újabb kell)'));
+    const ms = new MSClass();
+    v.disableRemotePlayback = true;      // (ManagedMediaSource needs it, unless an AirPlay source is given too)
+    v.src = URL.createObjectURL(ms);
+    ms.addEventListener('sourceopen', () => {
+      try {
+        sb = ms.addSourceBuffer(`video/mp4; codecs="${codec}"`);
+        sb.mode = 'segments';
+        sb.addEventListener('updateend', feed);
+        res();
+      } catch (e) { rej(e); }
+    }, {once: true});
+  });
+}
+async function start() {
+  const cam = cur, my = ac = new AbortController();
+  lastPic = Date.now();                  // (the 5 s without a picture count from here)
+  try {
+    const r = await fetch('/live/' + encodeURIComponent(cam), {signal: my.signal, cache: 'no-store'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const rd = r.body.getReader();
+    let head = new Uint8Array(0);
+    while (!sb) {                        // the init segment first: it names the codec
+      const {value, done} = await rd.read(); if (done) throw new Error('nincs adat');
+      const n = new Uint8Array(head.length + value.length); n.set(head); n.set(value, head.length); head = n;
+      if (initEnd(head)) await open(codecOf(head));
+    }
+    push(head);
+    for (;;) {
+      const {value, done} = await rd.read();
+      if (done) break;
+      push(value);
+    }
+    throw new Error('a kapcsolat megszakadt');
+  } catch (e) {
+    if (my.signal.aborted) return;
+    say('újrakapcsolódás… (' + e.message + ')');
+    stop(); cur = cam; retry = setTimeout(start, 2000);
+  }
+}
+function push(chunk) { q.push(chunk); feed(); }
+function feed() {
+  if (!sb || sb.updating || !q.length) return;
+  const b = v.buffered;
+  if (b.length && v.currentTime - b.start(0) > 30) { sb.remove(b.start(0), v.currentTime - 10); return; }   // keep the buffer small
+  let n = 0; for (const c of q) n += c.length;
+  const all = new Uint8Array(n); let o = 0; for (const c of q) { all.set(c, o); o += c.length; } q = [];
+  try { sb.appendBuffer(all); } catch (e) { say('hiba: ' + e.message); const c = cur; stop(); cur = c; retry = setTimeout(start, 2000); }
+}
+// stay near the live edge; restart when data comes but no picture for 8 s; the "no picture" text only after 5 s of it
+setInterval(() => {
+  if (!cur || !sb) return;
+  const b = v.buffered; if (!b.length) return;
+  const end = b.end(b.length - 1), t = v.currentTime;
+  let inside = false, next = null;
+  for (let i = 0; i < b.length; i++) {
+    if (t >= b.start(i) && t < b.end(i)) inside = true;
+    else if (b.start(i) > t && next === null) next = b.start(i);
+  }
+  if (end - t > 1.5) v.currentTime = Math.max(b.start(0), end - 0.3);
+  else if (!inside && next !== null) v.currentTime = next + 0.01;   // jump over a gap in the buffer
+  if (v.paused) v.play().catch(() => {});
+  const now = Date.now(), pic = v.readyState >= 2;
+  if (pic) lastPic = now;
+  // (the camera away: its last picture stays, with the text; no picture for 5 s: a wifi camera may pause that long)
+  say(away || (pic ? '' : now - lastPic > 5000 ? 'nincs kép…' : msg.textContent));
+  const frames = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : -1;
+  if (frames >= 0 && frames === lastFrames && end > lastEnd && !document.hidden) {    // data comes, the picture stands
+    if (++stuck >= 8) { stuck = 0; say('akadás, újraindítás…'); const c = cur; stop(); cur = c; start(); return; }
+  } else stuck = 0;
+  lastFrames = frames; lastEnd = end;
+}, 1000);
+// the phone went to the background: let the stream go; back in front: start again at the live edge
+document.addEventListener('visibilitychange', () => {
+  if (!cur) return;
+  const c = cur;
+  if (document.hidden) { stop(); cur = c; } else { stop(); cur = c; say('kapcsolódás…'); start(); }
+});
+// alarm / recording / camera away, in the list and on the picture
+const t0 = Date.now();
+setInterval(async () => {
+  try {
+    const st = await (await fetch('/status', {cache: 'no-store'})).json();
+    for (const c of cams) {
+      // (the server knows a camera's state only while somebody watches it: else only whether its recorder runs)
+      const s = st[c] || {}, b = btns[c], off = !!s.known && !s.online;
+      const norec = !s.known && (s.sock === false || c === cur) && Date.now() - t0 > 12000;
+      b.classList.toggle('alarm', !!s.alarm); b.classList.toggle('rec', !!s.rec); b.classList.toggle('away', off || norec);
+      b.classList.toggle('unk', !s.known && !norec);
+      b.lastChild.textContent = s.alarm ? 'riasztás' : s.rec ? 'rögzít' : norec ? 'nem fut a rögzítő' : off ? 'nem elérhető' : '';
+      if (c === cur) {
+        view.classList.toggle('alarm', !!s.alarm); view.classList.toggle('rec', !!s.rec && !s.alarm);
+        away = s.known && !s.online ? 'kamera nem elérhető' : norec ? 'nem fut a rögzítő' : '';
+      }
+    }
+    errEl.textContent = cams.length && !cams.some(c => (st[c] || {}).known || (st[c] || {}).sock) && Date.now() - t0 > 12000 ?
+                        'Hiba: nem fut a rögzítő' : '';
+  } catch (e) {}
+}, 2000);
+fromUrl();
+</script></body></html>

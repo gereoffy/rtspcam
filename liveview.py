@@ -17,7 +17,7 @@ every second (the recorders send the state every 2 s, also while the camera is a
 frame and bit rate (from the recorder), what reaches this browser, and the real delay from the camera to
 the screen (from the recorder's arrival time of the pictures; /status gives its clock).
 Pages (next to this script, read on every request): / is index.html (info/menu),
-/live is liveview.html (the grid). The same live view can run inside player.py (--live-dir DIR there):
+/live is liveview.html (the grid), /m is mobile.html (the phone view: a list of the cameras, a tap shows one on the whole screen). The same live view can run inside player.py (--live-dir DIR there):
 class Live is the shared part (/status, /live, /live/<camera>).
 Standard library only.
 """
@@ -214,7 +214,8 @@ class Live:
                 # no recent status: if its socket is open the recorder runs but has no picture (it is
                 # connecting to a camera that answers slowly, or waits for a key frame); otherwise
                 # the recorder does not run
-                st[name] = {"alarm": False, "rec": False, "known": hub.connected, "online": False}
+                st[name] = {"alarm": False, "rec": False, "known": hub.connected, "online": False,
+                            "sock": os.path.exists(hub.path)}   # (nobody watches: no state, but the recorder's socket is there)
         st["_now"] = now * 1000         # this machine's (= the recorders') clock, for the browser's clock offset
         return json.dumps(st).encode()
 
@@ -222,8 +223,9 @@ class Live:
         if path == "/status":
             self._send(h, self.status(), "application/json", [("Cache-Control", "no-store")])
             return True
-        if path in ("/live", "/live/"):
-            with open(os.path.join(HERE, "liveview.html"), "rb") as fh:     # read every time: edits need no restart
+        if path in ("/live", "/live/", "/m", "/m/"):       # /m: the phone view (mobile.html)
+            page = "mobile.html" if path.startswith("/m") else "liveview.html"
+            with open(os.path.join(HERE, page), "rb") as fh:     # read every time: edits need no restart
                 body = fh.read().replace(b"__CAMS__", json.dumps(self.cams).encode())
             self._send(h, body, "text/html; charset=utf-8", [("Cache-Control", "no-cache")])
             return True

@@ -67,6 +67,12 @@ fps és kbit/s – szűk vonalon kevesebb; a valódi késés a kamerától a ké
 (újabb kattintás: vissza a rácsba); ilyenkor **görgővel** az egérkurzornál nagyítható (max. 12×), húzással mozgatható, nagyítva egy kattintás 1×-re állít vissza.
 Ha nem fut a rögzítő (nincs socket, vagy nem jelentkezik), az oldal „Hiba: nem fut a rögzítő" üzenetet ír.
 
+**Telefonos nézet (`/m`, `mobile.html`):** a kamerák nevének listája (színes pont: zöld/narancs/piros = fut/rögzít/riasztás, szürke = nem
+elérhető vagy nem fut a rögzítő, üres karika = az állapot csak nézés közben ismert); egy névre koppintva csak az a kamera indul el, a teljes
+képernyőn (kamera beállításához, tisztításhoz). Felül a `←` (vissza a listához, a telefon vissza-gesztusa is) és a **▶ Felvételek** gomb; a képre
+koppintva a sáv eltűnik/visszajön, nagyítani két ujjal lehet. Egyszerre csak egy stream fut; ha a telefon a háttérbe kerül, a stream leáll, előtérben újraindul.
+iPhone-on iOS 17.1 vagy újabb kell (ott csak a ManagedMediaSource van, a sima MediaSource nincs).
+
 A rögzítőt `--live DIR`-rel kell indítani (kameránként egy `DIR/<kamera>.sock`). Ugyanez önálló szerverként is megy a lejátszó nélkül:
 `python3 liveview.py --live-dir DIR [--host 0.0.0.0] [--port 8781] [--cameras a,b,c]` (közös rész: `liveview.Live`).
 
