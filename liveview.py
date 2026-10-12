@@ -220,6 +220,13 @@ class Live:
         return json.dumps(st).encode()
 
     def handle(self, h, path):
+        if path == "/apple-touch-icon.png":     # the icon of the phone view added to the home screen (180x180)
+            try:
+                with open(os.path.join(HERE, "apple-touch-icon.png"), "rb") as fh:
+                    self._send(h, fh.read(), "image/png", [("Cache-Control", "max-age=86400")])
+            except OSError:
+                h.send_error(404)
+            return True
         if path == "/status":
             self._send(h, self.status(), "application/json", [("Cache-Control", "no-store")])
             return True

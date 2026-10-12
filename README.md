@@ -70,9 +70,14 @@ Ha nem fut a rögzítő (nincs socket, vagy nem jelentkezik), az oldal „Hiba: 
 **Telefonos nézet (`/m`, `mobile.html`):** a kamerák nevének listája (színes pont: zöld/narancs/piros = fut/rögzít/riasztás, szürke = nem
 elérhető vagy nem fut a rögzítő, üres karika = az állapot csak nézés közben ismert); egy névre koppintva csak az a kamera indul el, a teljes
 képernyőn (kamera beállításához, tisztításhoz). Felül a `←` (vissza a listához, a telefon vissza-gesztusa is) és a **▶ Felvételek** gomb; nagyítani két ujjal
-lehet. A képre koppintva vagy a `⛶` gombbal teljes képernyőre vált (iPhone-on a videót a rendszer lejátszójába, a stream fut tovább);
-a Safari Megosztás → „Főképernyőhöz adás” után onnan indítva az oldal saját appként, böngészősávok nélkül fut (fekvő módban is a teljes képernyő). Egyszerre csak egy stream fut; ha a telefon a háttérbe kerül, a stream leáll, előtérben újraindul.
+lehet. A képre koppintva vagy a `⛶` gombbal teljes képernyőre vált (iPhone-on a videót a rendszer lejátszójába, a stream fut tovább).
+Egyszerre csak egy stream fut; ha a telefon a háttérbe kerül, a stream leáll, előtérben újraindul.
 iPhone-on iOS 17.1 vagy újabb kell (ott csak a ManagedMediaSource van, a sima MediaSource nincs).
+
+**Ajánlott: főképernyőhöz adva, saját appként.** iPhone-on a Safariban nyisd meg a `/m` oldalt, Megosztás gomb (négyzet felfelé nyíllal) →
+„Főképernyőhöz adás” → Hozzáadás; Androidon a Chrome ⋮ menü → „Hozzáadás a kezdőképernyőhöz”. A „Kamerák” ikonról indítva az oldal saját
+appként fut, URL- és állapotsáv nélkül: fekvő helyzetben is a teljes képernyőt kapja a kép (a böngészőben a sávok elveszik a kép felét).
+Ilyenkor nincs böngésző-vissza gesztus: a listához a `←` gomb visz vissza. A felvételek (▶ Felvételek) is innen játszhatók le.
 
 A rögzítőt `--live DIR`-rel kell indítani (kameránként egy `DIR/<kamera>.sock`). Ugyanez önálló szerverként is megy a lejátszó nélkül:
 `python3 liveview.py --live-dir DIR [--host 0.0.0.0] [--port 8781] [--cameras a,b,c]` (közös rész: `liveview.Live`).
