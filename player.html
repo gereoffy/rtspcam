@@ -796,10 +796,7 @@ $('wrap').addEventListener('pointerdown', e => {
       if (tpreview && tpreview[2] - tpreview[0] > 0.01 && tpreview[3] - tpreview[1] > 0.01) tzones.push(tpreview); tpreview = null; tuneRecompute(1); });
 });
 $('zclear').onclick = () => { tzones = []; tuneRecompute(1); };
-function selectZone(z) {
-  selZone = z; tuneUI(); dirty = true;
-  const c = $('zlist').querySelector('.zone.sel'); if (c) c.scrollIntoView({block: 'nearest', inline: 'nearest'});
-}
+function selectZone(z) { selZone = z; tuneUI(); dirty = true; }     // (no scrolling to the list: the picture stays in view)
 // --- config files (configs/<camera>.json, the same ones the recorders read) ---
 async function tuneLoadConfig(announce) {
   const name = $('tname').value; if (!name) return;
