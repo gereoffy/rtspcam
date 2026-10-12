@@ -347,10 +347,11 @@ def make_handler(lib):
             self.send_header("Content-Type", "video/mp4")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(end - start + 1))
-            if download:                      # a download link (also when opened from an e-mail): save, not play
-                name = os.path.basename(path)
-                self.send_header("Content-Disposition", "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (
-                    name.encode("ascii", "replace").decode().replace('"', "_"), quote(name)))
+            # attachment: a download link (also when opened from an e-mail): save, not play. inline: plays, but the
+            # file name with .mp4 is there (the URL has none): iOS (iMessage, Safari) needs it to take it as a video
+            name = os.path.basename(path)
+            self.send_header("Content-Disposition", "%s; filename=\"%s\"; filename*=UTF-8''%s" % (
+                "attachment" if download else "inline", name.encode("ascii", "replace").decode().replace('"', "_"), quote(name)))
             if code == 206:
                 self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
             self.end_headers()
