@@ -69,8 +69,9 @@ Ha nem fut a rögzítő (nincs socket, vagy nem jelentkezik), az oldal „Hiba: 
 
 **Telefonos nézet (`/m`, `mobile.html`):** a kamerák nevének listája (színes pont: zöld/narancs/piros = fut/rögzít/riasztás, szürke = nem
 elérhető vagy nem fut a rögzítő, üres karika = az állapot csak nézés közben ismert); egy névre koppintva csak az a kamera indul el, a teljes
-képernyőn (kamera beállításához, tisztításhoz). Felül a `←` (vissza a listához, a telefon vissza-gesztusa is) és a **▶ Felvételek** gomb; a képre
-koppintva a sáv eltűnik/visszajön, nagyítani két ujjal lehet. Egyszerre csak egy stream fut; ha a telefon a háttérbe kerül, a stream leáll, előtérben újraindul.
+képernyőn (kamera beállításához, tisztításhoz). Felül a `←` (vissza a listához, a telefon vissza-gesztusa is) és a **▶ Felvételek** gomb; nagyítani két ujjal
+lehet. A képre koppintva vagy a `⛶` gombbal teljes képernyőre vált (iPhone-on a videót a rendszer lejátszójába, a stream fut tovább);
+a Safari Megosztás → „Főképernyőhöz adás” után onnan indítva az oldal saját appként, böngészősávok nélkül fut (fekvő módban is a teljes képernyő). Egyszerre csak egy stream fut; ha a telefon a háttérbe kerül, a stream leáll, előtérben újraindul.
 iPhone-on iOS 17.1 vagy újabb kell (ott csak a ManagedMediaSource van, a sima MediaSource nincs).
 
 A rögzítőt `--live DIR`-rel kell indítani (kameránként egy `DIR/<kamera>.sock`). Ugyanez önálló szerverként is megy a lejátszó nélkül:

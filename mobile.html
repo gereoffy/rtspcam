@@ -2,6 +2,9 @@
 <html lang="hu"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kamerák">
 <title>Élőkép</title>
 <link rel="icon" href="/favicon.ico">
 <style>
@@ -25,8 +28,8 @@
   .bar { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 10px;
          padding: max(8px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 22px max(10px, env(safe-area-inset-left));
          background: linear-gradient(rgba(0,0,0,.75), rgba(0,0,0,0)); }
-  #view.nobar .bar { display: none; }
-  #back { font-size: 20px; padding: 2px 14px; }
+  #tap { position: absolute; inset: 0; cursor: pointer; }     /* (iOS Safari gives no click on the video element itself) */
+  #back, #fs { font-size: 20px; padding: 2px 14px; }
   .bar a { color: #fff; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 6px; padding: 6px 12px;
            text-decoration: none; white-space: nowrap; }
   #name { font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -37,13 +40,14 @@
 <div id="list"><h1>Élőkép</h1><div id="err"></div></div>
 <div id="view">
   <video muted autoplay playsinline></video>
-  <div class="bar"><a id="back" href="#" title="vissza a kamerákhoz">←</a><span id="name"></span><a id="rec">▶ Felvételek</a></div>
+  <div id="tap"></div>
+  <div class="bar"><a id="back" href="#" title="vissza a kamerákhoz">←</a><span id="name"></span><a id="fs" href="#" title="teljes képernyő">⛶</a><a id="rec">▶ Felvételek</a></div>
   <div id="msg"></div>
 </div>
 <script>
 // Phone view of the live cameras (/m): the list of the cameras, a tap shows that one alone on the whole screen; only
 // that camera's stream runs (/live/<camera>, fragmented MP4 into Media Source Extensions, the same as the grid /live).
-// The phone's back gesture (or ← Kamerák) returns to the list; a tap on the picture hides/shows the top bar.
+// The phone's back gesture (or ←) returns to the list; a tap on the picture (or ⛶) goes full screen.
 const cams = __CAMS__;
 const MSClass = window.MediaSource || window.ManagedMediaSource;     // iPhone: only ManagedMediaSource (iOS 17.1+)
 const list = document.getElementById('list'), view = document.getElementById('view'), v = view.querySelector('video');
@@ -61,7 +65,20 @@ document.getElementById('back').onclick = e => {
   if (history.state && history.state.cam) history.back();          // (the same as the back gesture)
   else { history.replaceState(null, '', location.pathname); show(null); }
 };
-v.onclick = () => view.classList.toggle('nobar');
+// full screen (the button or a tap on the picture): the whole view where the browser can (Android, iPad, desktop); on an iPhone only the video itself can go full
+// screen (the system player; the stream keeps running). From the home screen ("Add to Home Screen") the page has no
+// browser bars at all.
+const fsBtn = document.getElementById('fs');
+if (!(view.requestFullscreen || view.webkitRequestFullscreen || v.webkitEnterFullscreen)) fsBtn.style.display = 'none';
+document.getElementById('tap').onclick = fsBtn.onclick = e => {
+  e.preventDefault();
+  if (document.fullscreenElement || document.webkitFullscreenElement)
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  else if (view.requestFullscreen) view.requestFullscreen().catch(() => {});
+  else if (view.webkitRequestFullscreen) view.webkitRequestFullscreen();
+  else v.webkitEnterFullscreen();
+};
+v.addEventListener('webkitendfullscreen', () => v.play().catch(() => {}));     // (the system player pauses on leaving)
 addEventListener('popstate', fromUrl);
 function fromUrl() { const c = decodeURIComponent(location.hash.slice(1)); show(cams.includes(c) ? c : null); }
 
@@ -74,7 +91,7 @@ function show(c) {
   if (!c) return;
   document.getElementById('name').textContent = c;
   document.getElementById('rec').href = '/player/' + encodeURIComponent(c);
-  view.classList.remove('nobar', 'alarm', 'rec');
+  view.classList.remove('alarm', 'rec');
   away = ''; say('kapcsolódás…'); start();
 }
 function stop() {
