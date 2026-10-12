@@ -145,7 +145,9 @@ küldenek, a YGTek ilyenkor a nagy IDR-képek tartalmát a kamerában elrontja �
   szigorúan növekvő időt ad; csomagvesztésnél a kocka „hiányos” jelzést kap. Session végén statisztika a naplóban.
 - `md5.c/.h` – MD5 a Digest hitelesítéshez.
 - `mp4_writer.c/.h` – fragmentált MP4 (`ftyp`, üres `moov`, GOP-onként `moof`+`mdat`, a végén `mfra`), mint az ffmpeg
-  `frag_keyframe+empty_moov+default_base_moof`; `.part`-ként íródik, lezáráskor átnevezi. `h264_sps.c`: az SPS-javítás
+  `frag_keyframe+empty_moov+default_base_moof`; `.part`-ként íródik, lezáráskor átnevezi. A `moov`/`mvex`-ben egy `mehd`
+  (a felvétel hossza) 0-val íródik, és lezáráskor kapja meg a valódi értéket: a Firefox se az `mfra`-t, se a `sidx`-et nem
+  használja, a hossz nélkül lassú vonalon csak a már letöltött részig engedne tekerni (és megállna). `h264_sps.c`: az SPS-javítás
   (`max_num_ref_frames` → 4, mint a `h264fix.py`), az avcC-ben és a kulcskockák SPS-ében. Hanggal (`--audio`) egy
   második sáv (`mp4a`/`esds`), a hangkeretek ugyanabban a fragmensben, saját `traf`-ban; az élő módban soha.
 - `mp4_reader.c/.h` – MP4/MOV index-olvasó (első H.264 videósáv; moov táblák és moof/trun fragmentek) a fájlmódhoz.

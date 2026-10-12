@@ -2,7 +2,9 @@
  * movflags=frag_keyframe+empty_moov+default_base_moof: ftyp, an empty moov, one
  * moof+mdat fragment per GOP and an mfra index at the end. The file is written as
  * <path>.part and renamed on close; after a crash everything up to the last
- * complete fragment is playable.
+ * complete fragment is playable. The moov has an mvex/mehd (fragment duration) written
+ * as 0 and filled in on close: Firefox uses neither the mfra nor a sidx, and without the
+ * full length it only lets the viewer seek as far as it has downloaded (slow lines).
  *
  * Input packets are Annex B or length-prefixed access units; samples are stored with
  * 4-byte NAL lengths. With fix_refs > 0 every SPS (in avcC and in-band) gets
@@ -58,6 +60,8 @@ typedef struct mp4w {
     frag_index *idx;
     int n_idx, cap_idx;
     int failed;
+    long mehd_pos;          /* file offset of the mehd duration (0: none) */
+    int64_t end_dts;        /* end of the last written video sample (dts + duration) */
 
     /* audio track (a_rate 0: none) */
     int a_rate, a_channels;
@@ -466,6 +470,12 @@ static int write_header(mp4w *w)
         put_audio_trak(w, &b);
 
     mvex = bb_box(&b, "mvex");
+    if (!w->live) {                 /* the length (1/1000 s), filled in on close */
+        box = bb_fullbox(&b, "mehd", 0, 0);
+        w->mehd_pos = (long)(w->file_off + b.len);
+        bb_u32(&b, 0);
+        bb_box_end(&b, box);
+    }
     box = bb_fullbox(&b, "trex", 0, 0);
     bb_u32(&b, 1);                  /* track id */
     bb_u32(&b, 1);                  /* sample description index */
@@ -547,6 +557,7 @@ static int flush_fragment(mp4w *w, int64_t next_dts, int have_next)
         if (dur <= 0 || dur > 0x7FFFFFFF)
             dur = w->last_duration;
         w->last_duration = dur;
+        w->end_dts = w->smp[i].dts + dur;
         bb_u32(&b, (uint32_t)dur);
         bb_u32(&b, (uint32_t)w->smp[i].size);
         bb_u32(&b, w->smp[i].key ? 0x02000000 : 0x01010000);
@@ -792,6 +803,12 @@ static int mp4_close(void *h)
     if (!w->failed && w->header_done) {
         if (flush_fragment(w, 0, 0) < 0 || write_mfra(w) < 0)
             w->failed = 1;
+        else if (w->mehd_pos > 0 && w->end_dts > 0) {      /* the length into the mehd */
+            uint64_t ms = (uint64_t)w->end_dts * 1000 / w->timescale;
+            uint8_t be[4] = { (uint8_t)(ms >> 24), (uint8_t)(ms >> 16), (uint8_t)(ms >> 8), (uint8_t)ms };
+            if (ms > 0xFFFFFFFFu || fseek(w->f, w->mehd_pos, SEEK_SET) || fwrite(be, 1, 4, w->f) != 4)
+                log_error("cannot write the length into %s", w->part);     /* (still playable) */
+        }
     }
     if (fclose(w->f))
         w->failed = 1;
