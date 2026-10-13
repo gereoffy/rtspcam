@@ -130,7 +130,7 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
       <div class="row"><label style="margin:0;color:var(--dim)">Kamera neve <input type="text" id="tname" size="12"></label><button id="tload">Betöltés</button><button id="tsave" style="background:var(--acc);color:#04121f;border-color:var(--acc);font-weight:600">Mentés</button><span id="tmsg" style="color:var(--dim);font-size:12px"></span></div>    </div>
     <div class="row" id="settings">
       <label class="chk"><input type="checkbox" id="showov"> mozgástérkép</label>
-      <select id="ovmode" title="mit rajzoljon a képre: kockák = a riasztó (piros) és a legnagyobb küszöb alatti (narancs) csoport; kockák + zaj = a többi mozgó cella is (sárga); vektorok = a mozgásvektorok (.mvvec; a vonal hossza a vektor hossza, a színe az iránya)"><option value="cells">kockák</option><option value="noise">kockák + zaj</option><option value="vec">vektorok</option></select>
+      <select id="ovmode" title="mit rajzoljon a képre: kockák = a riasztó (piros) és a legnagyobb küszöb alatti (narancs) csoport; kockák + zaj = a többi mozgó cella is (sárga); vektorok = a mozgásvektorok (.mvvec; a vonal hossza a vektor hossza, a színe az iránya); összesített = az egész felvétel riasztó (piros) cellái egy képen: ahol gyakrabban riasztott, ott pirosabb és erősebb, a ritkább helyek sárgák és halványak"><option value="cells">kockák</option><option value="noise">kockák + zaj</option><option value="vec">vektorok</option><option value="heat">összesített</option></select>
       <label class="chk" title="lejátszáskor magától belenagyít a riasztó (piros) képrészletbe és követi: a piros kockák befoglaló téglalapjának kb. kétszeresét mutatja, simított mozgással. Kézi nagyítás/húzás kikapcsolja."><input type="checkbox" id="autozoom"> autozoom</label>
       <label class="chk" title="a felvétel végén automatikusan elindul ugyanannak a kamerának a következő felvétele"><input type="checkbox" id="auto"> autoplay</label>
     </div>
@@ -577,7 +577,8 @@ function drawOverlay() {
   // not analysed (--max-ref-dist): show the map of the last analysed frame instead of flickering
   let f = curFrame;
   for (let k = 0; k < 8 && f > 0 && (fl[f] & 16); k++) f--;
-  if ($('showov').checked && effMode() !== 'vec' && !(fl[f] & SKIPF) && cnt[f]) {
+  if ($('showov').checked && effMode() === 'heat') drawHeat(recHeat(), hdr.w, hdr.h);
+  else if ($('showov').checked && effMode() !== 'vec' && !(fl[f] & SKIPF) && cnt[f]) {
     // letterbox-aware scale: the <video> uses object-fit: contain
     const W = ov.width, H = ov.height, s = Math.min(W / hdr.w, H / hdr.h), ox = (W - hdr.w*s)/2, oy = (H - hdr.h*s)/2, only = $('ovmode').value === 'cells';
     const dpr = devicePixelRatio || 1; octx.setTransform(zoom, 0, 0, zoom, panX * dpr, panY * dpr);   // same zoom/pan as the <video>
@@ -591,6 +592,45 @@ function drawOverlay() {
   const t = v.currentTime, T = dur();
   const vst = $('ovmode').value !== 'vec' ? '' : vecLoading ? ' · vektorok betöltése…' : vecError ? ' · a vektorok nem tölthetők be' + (typeof vecError === 'string' ? ': ' + vecError : '') : '';
   $('hud').innerHTML = `${hudName()}${fmtClock(t)} / ${fmtClock(T)} · kocka ${curFrame + 1}/${tms.length}${vst}` + (flags & 4 ? ' · <span style="color:var(--rec);font-weight:700">⚑ riasztás</span>' : '') + (flags & 2 ? ' · mozgás' : '');
+}
+// ---- summed map ("összesített"): how often each cell was red (alarm) over the whole recording, as one static picture ----
+// The counts are scaled to the 95th percentile of the non-zero cells, so a few outliers do not wash out the rest: the
+// frequent places are red and strong, the rare ones yellow and faint.
+let heatCache = {key: '', g: null}, tuneVer = 0;
+function heatScale(g) {
+  const nz = []; for (const x of g) if (x > 0) nz.push(x);
+  if (!nz.length) return {g, max: 1};
+  nz.sort((a, b) => a - b);
+  return {g, max: Math.max(1, nz[Math.floor((nz.length - 1) * 0.95)])};
+}
+function recHeat() {                            // from the .mvmap: the recorder's red (level 3) cells
+  const key = 'R' + (cur && cur.id) + '|' + tms.length;
+  if (heatCache.key === key) return heatCache.g;
+  const g = new Float32Array(hdr.gw * hdr.gh);
+  for (let f = 0; f < tms.length; f++) { if (fl[f] & SKIPF) continue;
+    for (let i = 0; i < cnt[f]; i++) if (bodyDv.getUint8(off[f] + 3*i + 2) === 3) g[bodyDv.getUint16(off[f] + 3*i, true)]++; }
+  heatCache = {key, g: Object.assign(heatScale(g), {gw: hdr.gw})};
+  return heatCache.g;
+}
+function tuneHeat() {                           // tuning: from the .mvvec and the sliders (the frames the global_limit throws out do not count)
+  const key = 'T' + (cur && cur.id) + '|' + tuneVer;
+  if (heatCache.key === key) return heatCache.g;
+  const gw = vecs.gw, g = new Float32Array(gw * vecs.gh);
+  for (let i = 0; i < vecs.t.length; i++) { if (!vecs.has[i] || tA.cluster[i] < TP.min_cluster || tA.over[i]) continue;
+    const r = tuneAnalyze(i, true);
+    for (const idx of r.act) if (r.sizes[tlab[idx]] >= TP.min_cluster) g[(((idx / tGW) | 0) - 1) * gw + (idx % tGW) - 1]++; }
+  heatCache = {key, g: Object.assign(heatScale(g), {gw})};
+  return heatCache.g;
+}
+function drawHeat(h, w, hh) {
+  const W = ov.width, H = ov.height, s = Math.min(W / w, H / hh), ox = (W - w * s) / 2, oy = (H - hh * s) / 2, dpr = devicePixelRatio || 1;
+  octx.setTransform(zoom, 0, 0, zoom, panX * dpr, panY * dpr);              // same zoom/pan as the <video>
+  for (let c = 0; c < h.g.length; c++) { const v0 = h.g[c]; if (!v0) continue;
+    const x = Math.min(1, v0 / h.max);
+    octx.fillStyle = `hsla(${(50 * (1 - x)).toFixed(0)}, 100%, 55%, ${(0.15 + 0.6 * x).toFixed(2)})`;
+    // (edges rounded to whole pixels: overlapping semi-transparent cells would draw a grid)
+    const gx = c % h.gw, gy = (c / h.gw) | 0, x0 = Math.round(ox + gx * 16 * s), y0 = Math.round(oy + gy * 16 * s);
+    octx.fillRect(x0, y0, Math.round(ox + (gx + 1) * 16 * s) - x0, Math.round(oy + (gy + 1) * 16 * s) - y0); }
 }
 const fmtClock = s => { s = Math.max(0, s || 0); return Math.floor(s/60) + ':' + (s % 60).toFixed(1).padStart(4, '0'); };
 function drawTimeline() {
@@ -662,6 +702,7 @@ function tuneAnalyze(i, full) {
 }
 function tuneRecompute(level) {
   if (!vecs) return;
+  tuneVer++;                                    // (the summed map of the tuning mode is made again when shown)
   if (level >= 1) { if (!tmark || tmark.length !== (vecs.gw + 2) * (vecs.gh + 2)) tuneSetup(); tuneMask();
     const N = vecs.t.length, cluster = new Int32Array(N), active = new Int32Array(N);
     for (let i = 0; i < N; i++) if (vecs.has[i]) { const r = tuneAnalyze(i, false); cluster[i] = r.best; active[i] = r.active; }
@@ -732,7 +773,8 @@ function drawOverlayTune() {
   curFrame = i0;
   const W = ov.width, H = ov.height, s = Math.min(W / vecs.w, H / vecs.h), ox = (W - vecs.w * s) / 2, oy = (H - vecs.h * s) / 2, dpr = devicePixelRatio || 1;
   octx.setTransform(zoom, 0, 0, zoom, panX * dpr, panY * dpr);
-  if ($('showov').checked && effMode() !== 'vec' && vecs.has[i]) {
+  if ($('showov').checked && effMode() === 'heat') drawHeat(tuneHeat(), vecs.w, vecs.h);
+  else if ($('showov').checked && effMode() !== 'vec' && vecs.has[i]) {
     const r = tuneAnalyze(i, true), only = $('ovmode').value === 'cells';      // same colours as the recorder's map: red >= threshold, orange = largest below it, yellow = the rest
     for (const idx of r.act) { const id = tlab[idx], lvl = r.sizes[id] >= TP.min_cluster ? 3 : (id === r.bestId ? 2 : 1); if (only && lvl === 1) continue;
       const gx = (idx % tGW) - 1, gy = ((idx / tGW) | 0) - 1;
