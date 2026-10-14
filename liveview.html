@@ -37,11 +37,17 @@
   .tile.offline::after, .tile.norec::after { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
          background: rgba(0,0,0,.7); border: 1px solid var(--muted); color: #ddd; padding: 6px 14px; border-radius: 6px;
          font-size: 15px; white-space: nowrap; pointer-events: none; z-index: 1; }
+  /* the live view is already open on another tab of this browser: this one waits (see "one tab at a time") */
+  #dup { position: fixed; inset: 0; background: rgba(10,12,16,.92); display: none; align-items: center; justify-content: center; z-index: 10; }
+  #dup div { background: #1d2027; border: 1px solid #ff9f1a; border-radius: 10px; padding: 22px 28px; max-width: 460px; text-align: center; font-size: 16px; line-height: 1.5; }
+  #dup button { margin-top: 14px; font: 600 15px system-ui, sans-serif; padding: 8px 18px; border-radius: 6px; border: 1px solid #ff9f1a;
+         background: #3a2a10; color: #ffd28a; cursor: pointer; }
   .tile.offline::after { content: 'kamera nem elérhető'; }
   .tile.norec::after { content: 'nem fut a rögzítő'; }
 </style></head><body>
 <div id="grid"></div>
 <div id="err"></div>
+<div id="dup"><div><span id="dupmsg"></span><br><button id="dupbtn"></button></div></div>
 <script>
 const cams = __CAMS__;
 const grid = document.getElementById('grid');
@@ -163,7 +169,7 @@ class Tile {
     this.parked = false; this.unparkT = Date.now(); this.status('kapcsolódás…'); this.start();
   }
   async start() {
-    if (this.parked) return;                            // (a pending retry of a tile that was parked meanwhile)
+    if (this.parked || blocked) return;                 // (a pending retry of a tile that was parked meanwhile; another tab views)
     this.stop();
     const ac = this.ac = new AbortController();
     try {
@@ -276,7 +282,39 @@ class Tile {
 }
 const err = document.getElementById('err'), t0 = Date.now();
 if (!cams.length) { err.textContent = 'Hiba: nem fut a rögzítő (nincs élőkép-csatorna)'; err.style.display = 'block'; }
-const tiles = cams.map(c => new Tile(c));
+// One tab at a time: two grids in the same browser would share its connection limit (and the machine's decoding), and
+// neither would show every camera. A new tab asks on a BroadcastChannel whether another one is live (works on plain http,
+// unlike the Web Locks API) and starts no stream before the answer; if one is, it shows a notice with a button that takes
+// the view over (the other tab stops its streams and shows the same notice).
+let blocked = true;
+const tiles = cams.map(c => new Tile(c));               // (no stream yet: blocked)
+const bc = 'BroadcastChannel' in window ? new BroadcastChannel('rtspcam-live') : null;
+function setBlocked(on, msg, btn) {
+  blocked = on;
+  document.getElementById('dup').style.display = on ? 'flex' : 'none';
+  if (on) {
+    document.getElementById('dupmsg').textContent = msg;
+    document.getElementById('dupbtn').textContent = btn;
+    tiles.forEach(t => { t.stop(); t.status('szünetel (másik lapon nézik)'); });
+  } else tiles.forEach(t => { if (!t.parked) { t.status('kapcsolódás…'); t.start(); } });
+}
+document.getElementById('dupbtn').onclick = () => { if (bc) bc.postMessage('takeover'); setBlocked(false); };
+if (bc) {
+  bc.onmessage = e => {
+    if (e.data === 'hello' && !blocked) bc.postMessage('here');          // a new tab asks: this one is live
+    else if (e.data === 'here' && blocked && !started) otherLive = true;
+    else if (e.data === 'takeover' && !blocked)
+      setBlocked(true, 'Az élőképet egy másik lapon nyitották meg, ott fut tovább. Egyszerre csak egy lapon nézhető.', 'Vissza ide');
+  };
+  bc.postMessage('hello');
+}
+let otherLive = false, started = false;
+setTimeout(() => {
+  started = true;
+  if (otherLive) setBlocked(true, 'Az élőkép már nyitva van egy másik lapon ebben a böngészőben. Egyszerre csak egy lapon nézhető (a kamerák ' +
+                               'képeit két lap együtt nem tudja mind betölteni).', 'Nézés ezen a lapon (a másik lap leáll)');
+  else setBlocked(false);
+}, bc ? 300 : 0);
 // the details on the tiles: off by default (only the name and the recordings button); the "i" key toggles them, /live?info
 // turns them on, ?info=0 off; remembered in this browser
 function setInfo(on) {

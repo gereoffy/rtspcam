@@ -66,6 +66,10 @@ Ilyenkor a sávban a név mellett az állapot is látszik (felbontás; „kamera
 fps és kbit/s – szűk vonalon kevesebb; a valódi késés a kamerától a képernyőig; újracsatlakozások), a kép nélküli csempén pedig a kapcsolódási üzenetek. A képre kattintva egy kamera nagyban látszik
 (újabb kattintás: vissza a rácsba); ilyenkor **görgővel** az egérkurzornál nagyítható (max. 12×), húzással mozgatható, nagyítva egy kattintás 1×-re állít vissza.
 Ha nem fut a rögzítő (nincs socket, vagy nem jelentkezik), az oldal „Hiba: nem fut a rögzítő" üzenetet ír.
+**Egyszerre egy lapon:** ha ugyanabban a böngészőben egy második lapon is megnyitják a rácsot, az nem indít streamet (két lap együtt
+nem tudná az összes kamerát betölteni a böngésző kapcsolatlimitje miatt, és a gépnek is sok), hanem kiírja, hogy az élőkép már nyitva van
+egy másik lapon; a „Nézés ezen a lapon” gombbal átveszi, ilyenkor a régi lap állítja le a streamjeit („Vissza ide” gombbal). A lapok egy
+`BroadcastChannel`-en beszélnek egymással (sima http-n is megy); más böngészőt vagy másik gépet nem érint.
 
 **Telefonos nézet (`/m`, `mobile.html`):** a kamerák nevének listája (színes pont: zöld/narancs/piros = fut/rögzít/riasztás, szürke = nem
 elérhető vagy nem fut a rögzítő, üres karika = az állapot csak nézés közben ismert); egy névre koppintva csak az a kamera indul el, a teljes
