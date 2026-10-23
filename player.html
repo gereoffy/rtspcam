@@ -30,6 +30,13 @@ button:hover{border-color:var(--acc);cursor:pointer}
 .item .t{font-variant-numeric:tabular-nums;font-weight:600}
 .item .c{color:var(--acc)}
 .item .a{color:var(--rec);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.item .k{color:#ffd23f}
+#keepbtn,#delbtn{min-width:38px;font-size:16px;padding-left:8px;padding-right:8px}
+#keepbtn.on{color:#ffd23f;border-color:#ffd23f}
+#delbtn{margin-left:auto}#delbtn:disabled{opacity:.35;cursor:not-allowed}
+#note{flex:1;min-width:0}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#262b34;border:1px solid var(--line);border-radius:8px;padding:8px 14px;display:none;gap:12px;align-items:center;z-index:20;box-shadow:0 4px 18px #0008}
+#toast button{background:var(--acc);color:#04121f;border-color:var(--acc);font-weight:600}
 .stage{width:min(100%,max(400px,calc((100vh - 270px)*var(--ar,1.333))));margin:0 auto}
 .wrap{position:relative;background:#000;border-radius:6px;overflow:hidden;width:100%}
 video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0 0;will-change:transform}
@@ -92,7 +99,7 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
         <div><label>Napszak -tól</label><input type="time" id="ft0"></div>
         <div><label>Napszak -ig</label><input type="time" id="ft1"></div>
       </div>
-      <div class="row"><label class="chk"><input type="checkbox" id="fmap"> csak térképpel</label><button id="freset" class="grow" style="flex:0">Szűrők törlése</button></div>
+      <div class="row"><label class="chk"><input type="checkbox" id="fmap"> csak térképpel</label><label class="chk"><input type="checkbox" id="fkeep"> csak <span style="color:#ffd23f">★</span> jelöltek</label><button id="freset" class="grow" style="flex:0">Szűrők törlése</button></div>
     </details>
     <div id="list"></div>
   </aside>
@@ -117,12 +124,15 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
     </div>
     <div class="row vrow">
       <button id="play" style="min-width:90px">▶ Lejátszás</button>
+      <button id="keepbtn" title="megjelölés: a megjelölt felvétel nem törlődik (sem kézzel, sem az automatikus takarításkor); a listában ★, szűrhető. Megjegyzés is írható hozzá (nem kötelező)">☆</button>
       <select id="speed" title="lejátszási sebesség"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
       <span class="step" title="kockánkénti léptetés (←/→, Shift: 10 kocka)"><button id="prev" title="előző kocka (←)">◀</button><span>kocka</span><button id="next" title="következő kocka (→)">▶</button></span>
       <select id="gain" style="display:none" title="hang: néma, vagy a hangerő (2×–8×: erősítés halk felvételekhez, csak lejátszáskor, a fájl nem változik; a hangos részeket egy limiter fogja vissza). M: néma / az utolsó hangerő"><option value="0" selected>🔇 Néma</option><option value="1">🔊 1×</option><option value="2">🔊 2×</option><option value="4">🔊 4×</option><option value="8">🔊 8×</option></select>
       <button id="tunebtn" title="a riasztási beállítások hangolása: csúszkák, zónák, mentés a kamera konfigjába. Bekapcsolva az idővonal és a kockák a .mvvec-ből és a csúszkákból számolódnak (a rögzítő .mvmap-je helyett); ha a felvételhez nincs .mvvec, a szerver legenerálja">⚙ Beállítások</button>
+      <button id="delbtn" title="a felvétel törlése (rákérdezés nélkül; pár másodpercig visszavonható)">🗑</button>
     </div>
     <div class="row vrow" style="gap:0"><a id="fname" title="kattintás: letöltés · jobb gomb → link másolása: e-mailbe küldhető, megnyitva a böngészőben lejátssza (annak, aki eléri ezt a szervert)"></a><span id="hud"></span></div>
+    <div class="row vrow" id="noterow" style="display:none"><span style="color:#ffd23f">★</span><input type="text" id="note" maxlength="300" placeholder="megjegyzés (nem kötelező) – Enter: mentés" title="a megjelölt felvétel megjegyzése: a listában a felvétel fölé víve látszik"></div>
     <div id="tunepanel">
       <div class="tp-grid" id="tsliders"></div>
       <div class="row"><button id="drawz" title="húzz egy téglalapot a képen: ezt a területet a rögzítő figyelmen kívül hagyja">▭ Zóna rajzolása</button><span id="zlist"></span><button id="zclear">Zónák törlése</button></div>
@@ -138,6 +148,7 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
    </div>
   </section>
 </main>
+<div id="toast"><span id="toastmsg"></span><button id="undo">Visszavonás</button></div>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -196,10 +207,10 @@ async function loadList() {
 }
 const dayState = {};                                              // date -> collapsed (user's choice); the default is below
 function applyFilters() {
-  const cam = $('fcam').value, d0 = $('fd0').value, d1 = $('fd1').value, t0 = $('ft0').value, t1 = $('ft1').value, mp = $('fmap').checked, per = $('fper').value, ps = perStart();
-  shown = items.filter(i => (!cam || i.camera === cam) && (!ps || i.ts >= ps) && (!d0 || i.date >= d0) && (!d1 || i.date <= d1) && (!mp || i.has_map)
+  const cam = $('fcam').value, d0 = $('fd0').value, d1 = $('fd1').value, t0 = $('ft0').value, t1 = $('ft1').value, mp = $('fmap').checked, kp = $('fkeep').checked, per = $('fper').value, ps = perStart();
+  shown = items.filter(i => (!cam || i.camera === cam) && (!ps || i.ts >= ps) && (!d0 || i.date >= d0) && (!d1 || i.date <= d1) && (!mp || i.has_map) && (!kp || i.keep)
     && (!t0 || i.time.slice(0,5) >= t0) && (!t1 || i.time.slice(0,5) <= t1)).sort((a,b) => b.ts - a.ts);
-  const nf = [cam, d0, d1, t0, t1].filter(Boolean).length + (mp ? 1 : 0) + (per !== '0' ? 1 : 0);
+  const nf = [cam, d0, d1, t0, t1].filter(Boolean).length + (mp ? 1 : 0) + (kp ? 1 : 0) + (per !== '0' ? 1 : 0);
   $('fbadge').textContent = nf ? ' · ' + nf + ' aktív' : '';
   // day groups: a click on the date folds it; with a long period (a week or everything) all days but the newest start folded
   const counts = {}; for (const it of shown) counts[it.date] = (counts[it.date] || 0) + 1;
@@ -209,22 +220,63 @@ function applyFilters() {
   for (const it of shown) {
     if (it.date !== day) { day = it.date; html += `<div class="day" data-d="${day}">${folded(day) ? '▸' : '▾'} ${day} · ${counts[day]}</div>`; }
     if (folded(day)) continue;
-    html += `<div class="item${cur && cur.id === it.id ? ' sel' : ''}" data-id="${it.id}" title="${it.name}"><span class="t">${it.time}</span><span class="c">${it.camera}</span>${it.has_map ? `<span class="a">${it.alarm_s ? '⚑ ' + it.alarm_s.toFixed(0) + ' s' : ''}</span>` : '<span class="a" style="color:var(--dim)">nincs térkép</span>'}</div>`;
+    html += `<div class="item${cur && cur.id === it.id ? ' sel' : ''}" data-id="${it.id}" title="${escHtml(it.name + (it.keep ? ' · ★ megjelölve' + (it.note ? ': ' + it.note : '') : ''))}"><span class="t">${it.time}</span><span class="c">${it.camera}${it.keep ? ' <span class="k">★</span>' : ''}</span>${it.has_map ? `<span class="a">${it.alarm_s ? '⚑ ' + it.alarm_s.toFixed(0) + ' s' : ''}</span>` : '<span class="a" style="color:var(--dim)">nincs térkép</span>'}</div>`;
   }
   $('list').innerHTML = html || '<div style="color:var(--dim);padding:12px">Nincs találat.' + (per !== '0' ? ' <a href="#" id="showall" style="color:var(--acc)">Minden időszak</a>' : '') + '</div>';
   $('list').querySelectorAll('.item').forEach(e => e.onclick = () => select(items.find(i => i.id === e.dataset.id), true));
   $('list').querySelectorAll('.day').forEach(e => e.onclick = () => { dayState[e.dataset.d] = !folded(e.dataset.d); const sc = $('list').scrollTop; applyFilters(); $('list').scrollTop = sc; });
   const sa = $('showall'); if (sa) sa.onclick = ev => { ev.preventDefault(); $('fper').value = '0'; $('fper').dispatchEvent(new Event('input')); };
   $('count').textContent = shown.length + ' / ' + items.length + ' felvétel';
-  try { localStorage.setItem('rc_filters', JSON.stringify({cam, d0, d1, t0, t1, mp, per})); } catch (e) {}
+  try { localStorage.setItem('rc_filters', JSON.stringify({cam, d0, d1, t0, t1, mp, kp, per})); } catch (e) {}
 }
 function restoreFilters() {
   try { const f = JSON.parse(localStorage.getItem('rc_filters') || '{}');
-    $('fd0').value = f.d0 || ''; $('fd1').value = f.d1 || ''; $('ft0').value = f.t0 || ''; $('ft1').value = f.t1 || ''; $('fmap').checked = !!f.mp; } catch (e) {}
+    $('fd0').value = f.d0 || ''; $('fd1').value = f.d1 || ''; $('ft0').value = f.t0 || ''; $('ft1').value = f.t1 || ''; $('fmap').checked = !!f.mp; $('fkeep').checked = !!f.kp; } catch (e) {}
 }
-['fcam','fd0','fd1','ft0','ft1','fmap'].forEach(id => $(id).addEventListener('input', applyFilters));
+['fcam','fd0','fd1','ft0','ft1','fmap','fkeep'].forEach(id => $(id).addEventListener('input', applyFilters));
 $('fper').addEventListener('input', async () => { await ensureRange(); applyFilters(); });
-$('freset').onclick = async () => { $('fcam').value = FIXCAM; $('fper').value = defaultPeriod(); for (const id of ['fd0','fd1','ft0','ft1']) $(id).value = ''; $('fmap').checked = false; await ensureRange(); applyFilters(); };
+$('freset').onclick = async () => { $('fcam').value = FIXCAM; $('fper').value = defaultPeriod(); for (const id of ['fd0','fd1','ft0','ft1']) $(id).value = ''; $('fmap').checked = false; $('fkeep').checked = false; await ensureRange(); applyFilters(); };
+// ---- marking (★, <name>.keep on the server, with an optional note) and deleting (to the trash, undo for a few seconds) ----
+function keepUI() {
+  const k = !!(cur && cur.keep);
+  $('keepbtn').textContent = k ? '★' : '☆'; $('keepbtn').classList.toggle('on', k); $('keepbtn').disabled = !cur;
+  $('noterow').style.display = k ? '' : 'none';
+  $('delbtn').disabled = !cur || k;
+  $('delbtn').title = k ? 'a megjelölt felvétel nem törölhető (előbb vedd le a jelölést: ★)' : 'a felvétel törlése (rákérdezés nélkül; pár másodpercig visszavonható)';
+}
+function relist() { const sc = $('list').scrollTop; applyFilters(); $('list').scrollTop = sc; }
+async function setKeep(it, on) {
+  const note = on ? $('note').value.trim() : '';
+  const r = await fetch('/api/keep?id=' + encodeURIComponent(it.id) + '&on=' + (on ? 1 : 0), {method: 'POST', body: note});
+  if (!r.ok) { $('info').textContent = 'A jelölés nem sikerült: ' + (await r.text()); $('inforow').style.display = ''; return false; }
+  it.keep = on; if (on) it.note = note;          // (unmarked: the note stays in the field until another recording is chosen: ☆ brings it back)
+  if (it === cur) keepUI();
+  relist(); return true;
+}
+$('keepbtn').onclick = async () => { if (cur && await setKeep(cur, !cur.keep) && cur.keep) $('note').focus(); };
+$('note').addEventListener('change', () => { if (cur && cur.keep && $('note').value.trim() !== (cur.note || '')) setKeep(cur, true); });
+$('note').addEventListener('keydown', e => { if (e.key === 'Enter') $('note').blur(); });
+let undoTimer = 0, undoItem = null;
+$('delbtn').onclick = async () => {
+  if (!cur || cur.keep) return;
+  const it = cur, i = shown.findIndex(x => x.id === it.id), nxt = shown[i + 1] || shown[i - 1] || null;   // then the next one in the list
+  v.pause(); v.removeAttribute('src'); v.load();                  // (lets the file go)
+  const r = await fetch('/api/delete?id=' + encodeURIComponent(it.id), {method: 'POST'});
+  if (!r.ok) { $('info').textContent = 'A törlés nem sikerült: ' + (await r.text()); $('inforow').style.display = ''; select(it, false); return; }
+  items = items.filter(x => x !== it); relist();
+  undoItem = it; $('toastmsg').textContent = 'Törölve: ' + it.name; $('toast').style.display = 'flex';
+  clearTimeout(undoTimer); undoTimer = setTimeout(() => { $('toast').style.display = 'none'; undoItem = null; }, 8000);
+  if (nxt) select(nxt, true);
+  else { if (tuneOn) tuneClose(); cur = null; hdr = null; tms = []; vecs = null; keepUI(); $('fname').textContent = ''; $('fname').removeAttribute('href');
+         history.replaceState(null, '', location.pathname + location.search); $('msg').textContent = 'Válassz egy felvételt a listából.'; $('msg').style.display = 'flex'; dirty = true; }
+};
+$('undo').onclick = async () => {
+  const it = undoItem; if (!it) return;
+  clearTimeout(undoTimer); $('toast').style.display = 'none'; undoItem = null;
+  const r = await fetch('/api/undelete?id=' + encodeURIComponent(it.id), {method: 'POST'});
+  if (!r.ok) { $('info').textContent = 'A visszaállítás nem sikerült: ' + (await r.text()); $('inforow').style.display = ''; return; }
+  items.push(it); relist(); select(it, true);
+};
 // ---- map ----------------------------------------------------------------------
 // frames without a score: 1 = key frame, 16 = not analysed (reference too far back, rtspcam --max-ref-dist)
 const SKIPF = 1 | 16;
@@ -285,6 +337,7 @@ if (haveRvfc) { const rv = (now, md) => { mediaT = cbMedia = md.mediaTime; cbNow
 async function select(it, setHash) {
   if (cur && (cur.camera !== it.camera || $('autozoom').checked)) { followSig = ''; zoom = 1; applyZoom(); }   // a new camera or an autozoom view starts at 1x
   cur = it; if (setHash) location.hash = encodeURIComponent(it.id);
+  $('note').value = it.note || ''; keepUI();
   // the file name is a link to the recording: a click here downloads it (the download attribute), while the copied link
   // (right click, e.g. into an e-mail) opens it in the browser and plays it (for anyone who reaches this server)
   const fn = $('fname'); fn.textContent = it.name + '.mp4'; fn.href = '/video?id=' + encodeURIComponent(it.id); fn.download = it.name + '.mp4';
@@ -917,6 +970,7 @@ try { const m = localStorage.getItem('rc_ovmode'); if (m && [...$('ovmode').opti
 $('ovmode').addEventListener('change', () => { try { localStorage.setItem('rc_ovmode', $('ovmode').value); } catch (e) {}
   if ($('ovmode').value === 'vec' && cur && !vecs && !vecLoading) loadVec(cur); dirty = true; });
 new ResizeObserver(() => applyZoom()).observe($('wrap'));
+keepUI();                                           // (no recording yet: ☆ and 🗑 disabled)
 loadList().then(loop);
 </script>
 </body>

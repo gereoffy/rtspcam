@@ -8,6 +8,9 @@ Pages: / (index.html), /player and /player/<camera> (the player), /live (live vi
 Lists the recordings of all cameras (filter by period / camera / date / time of day), streams the
 full-resolution H.264 files to the browser exactly as they are (the recorder writes browser-ready files)
 and draws the motion map (.mvmap) / vectors (.mvvec) over them; tuning mode works from the .mvvec.
+Marking and deleting (from the player): a marked recording has a <name>.keep file next to it (its text: an optional
+note); it is never deleted (rotate.py skips it, the player refuses). Deleting moves the recording's files to
+<root>/.deleted/<camera>/<date>/ (undo: back); rotate.py empties that folder every day.
 Standard library only; PyAV is used only to read the length of a recording that has no .mvmap.
 """
 import argparse
@@ -47,6 +50,8 @@ TUNE_KEYS = ("mv_min", "min_cluster", "global_limit", "window", "trigger_frames"
 # <name>_<HHMMSS>.mp4 (the recorder); any other *.mp4 is accepted too, its time of day then comes from the file time
 FNAME = re.compile(r"^(?P<stem>.+?)(?:_(?P<hms>\d{6}))?\.mp4$")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+SIDECARS = (".mp4", ".mvmap", ".mvvec")          # one recording = these files (+ .keep when marked)
+TRASH = ".deleted"                                # deleted recordings wait here (<root>/.deleted/<camera>/<date>/) until rotate.py empties it
 
 
 def cfg_path(camera):
@@ -104,13 +109,15 @@ class Library:
         out = []
         for cam in sorted(os.listdir(self.root)):
             cdir = os.path.join(self.root, cam)
-            if not os.path.isdir(cdir):
+            if cam.startswith(".") or not os.path.isdir(cdir):      # (.deleted: the trash)
                 continue
             for date in sorted(os.listdir(cdir)):
                 ddir = os.path.join(cdir, date)
                 if not (DATE.match(date) and os.path.isdir(ddir)) or (since_date and date < since_date):
                     continue            # (older days are not even listed when only the recent ones are wanted)
-                for fn in sorted(os.listdir(ddir)):
+                names = sorted(os.listdir(ddir))
+                keeps = set(fn[:-5] for fn in names if fn.endswith(".keep"))
+                for fn in names:
                     m = FNAME.match(fn)
                     if m:
                         path = os.path.join(ddir, fn)
@@ -120,7 +127,7 @@ class Library:
                                 hms = time.strftime("%H%M%S", time.localtime(os.stat(path).st_mtime))
                             except OSError:
                                 continue
-                        out.append((cam, date, hms, path))
+                        out.append((cam, date, hms, path, fn[:-4] in keeps))
         return out
 
     def describe(self, path):
@@ -163,7 +170,7 @@ class Library:
         refreshes incrementally); the cache index is pruned only by a complete listing"""
         items = []
         seen = set()
-        for cam, date, hms, path in self.scan(time.strftime("%Y-%m-%d", time.localtime(since)) if since else None):
+        for cam, date, hms, path, keep in self.scan(time.strftime("%Y-%m-%d", time.localtime(since)) if since else None):
             seen.add(path)
             if camera is not None and cam != camera:       # /player/<camera>: only that camera (the others stay in the cache index)
                 continue
@@ -172,11 +179,68 @@ class Library:
             if since and ts < since:
                 continue
             m = self.describe(path)
-            items.append({"id": rel, "camera": cam, "date": date, "time": "%s:%s:%s" % (hms[:2], hms[2:4], hms[4:]),
-                          "name": os.path.basename(rel), "ts": ts, "has_vec": os.path.exists(path[:-4] + ".mvvec"), **m})
+            it = {"id": rel, "camera": cam, "date": date, "time": "%s:%s:%s" % (hms[:2], hms[2:4], hms[4:]),
+                  "name": os.path.basename(rel), "ts": ts, "has_vec": os.path.exists(path[:-4] + ".mvvec")}
+            it.update(m)
+            if keep:                                      # marked: the note too (only these files are read)
+                it["keep"] = True
+                it["note"] = self.read_note(path[:-4] + ".keep")
+            items.append(it)
         if not since:
             self.meta = {k: v for k, v in self.meta.items() if k in seen}      # forget deleted recordings
         return items
+
+    # ---- marking (.keep) and deleting (to the trash) ----------------------------------------
+    @staticmethod
+    def read_note(path):
+        try:
+            with open(path, "rb") as fh:
+                return fh.read(4000).decode("utf-8", "replace").strip()
+        except OSError:
+            return ""
+
+    def set_keep(self, rid, on, note=""):
+        """mark (on: <name>.keep with the note as its text, may be empty) or unmark a recording; False if it does not exist"""
+        mp4 = self.resolve(rid, ".mp4")
+        if not mp4:
+            return False
+        kp = mp4[:-4] + ".keep"
+        if on:
+            with open(kp + ".tmp", "wb") as fh:
+                fh.write(note.strip().encode("utf-8"))
+            os.replace(kp + ".tmp", kp)
+        elif os.path.exists(kp):
+            os.remove(kp)
+        return True
+
+    def trash_path(self, rid, ext):
+        p = os.path.abspath(os.path.join(self.root, TRASH, rid + ext))
+        return p if p.startswith(os.path.join(self.root, TRASH) + os.sep) else None
+
+    def delete(self, rid):
+        """move the recording's files to the trash; refused (ValueError) for a marked one"""
+        mp4 = self.resolve(rid, ".mp4")
+        if not mp4 or rid.startswith("."):           # (not one already in the trash)
+            raise FileNotFoundError(rid)
+        if os.path.exists(mp4[:-4] + ".keep"):
+            raise ValueError("a megjelölt felvétel nem törölhető (előbb vedd le a jelölést)")
+        dst = self.trash_path(rid, "")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        for ext in SIDECARS:                              # (same disk: a rename, instant)
+            if os.path.exists(mp4[:-4] + ext):
+                os.replace(mp4[:-4] + ext, dst + ext)
+        self.meta.pop(mp4, None)
+
+    def undelete(self, rid):
+        """back from the trash (the undo right after a delete)"""
+        src = self.trash_path(rid, "")
+        dst = os.path.abspath(os.path.join(self.root, rid))
+        if not src or not dst.startswith(self.root + os.sep) or not os.path.isfile(src + ".mp4"):
+            raise FileNotFoundError(rid)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        for ext in SIDECARS:
+            if os.path.exists(src + ext) and not os.path.exists(dst + ext):
+                os.replace(src + ext, dst + ext)
 
     def ensure_vec(self, mp4):
         """path of the recording's .mvvec; a missing one is made first: `rtspcam --vectors FILE.mp4` (file mode) writes only the missing sidecar, never touches an
@@ -237,6 +301,25 @@ def make_handler(lib):
         def do_POST(self):
             u = urlparse(self.path)
             q = parse_qs(u.query)
+            if u.path in ("/api/keep", "/api/delete", "/api/undelete") and q.get("id"):
+                rid = q["id"][0]
+                try:
+                    if u.path == "/api/keep":           # ?on=1 (the body: the note, may be empty) / ?on=0
+                        n = int(self.headers.get("Content-Length", 0))
+                        note = self.rfile.read(n).decode("utf-8", "replace") if n else ""
+                        if not lib.set_keep(rid, q.get("on", ["1"])[0] != "0", note):
+                            return self.send_bytes(b"not found", "text/plain", 404)
+                    elif u.path == "/api/delete":
+                        lib.delete(rid)
+                    else:
+                        lib.undelete(rid)
+                    return self.send_bytes(b'{"ok":true}', "application/json")
+                except FileNotFoundError:
+                    return self.send_bytes(b"not found", "text/plain", 404)
+                except ValueError as e:
+                    return self.send_bytes(str(e).encode(), "text/plain; charset=utf-8", 409)
+                except OSError as e:
+                    return self.send_bytes(str(e).encode(), "text/plain; charset=utf-8", 500)
             if u.path == "/api/tuneconfig" and q.get("name"):
                 try:
                     new = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))

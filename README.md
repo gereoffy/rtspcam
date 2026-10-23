@@ -51,10 +51,35 @@ következő felvétele indul. A kép és az idővonal elfér az ablak magasság�
 
 **Autozoom** (alul, az autoplay előtt, alapból ki): lejátszás közben magától belenagyít a riasztó (piros) képrészletbe és követi. Kockánként a piros cellák befoglaló téglalapjából (rögzítő módban a `.mvmap`-ből, hangolásnál a `.mvvec`-ből és a csúszkákból) a kb. kétszeres méretű képkivágat lesz (legalább a kép szélességének 25%-a), a kivágatok sorozata – a mozgás előtt és után a teljes képre kitávolítással, két esemény között viszont nem távolít ki, hanem lassan halad a következő felé – 40 ms-os mintákra bontva Gauss-szűrővel (σ = 0,5 s) simítva, idő szerint játssza vissza (a teljes felvétel ismert, ezért „előre néz”). Kézi nagyítás vagy húzás kikapcsolja. A hangoló a `FOLLOW` konstansokkal (`margin`, `minFrac`, `sigma`) a `player.html`-ben állítható.
 
+**Megjelölés és törlés:** a lejátszás gomb melletti **☆** megjelöli a felvételt (★): a felvétel mellé egy `<név>.keep` fájl kerül,
+a megjelölt felvételt sem kézzel, sem az automatikus takarítás nem törli. Jelölés után a vezérlősor alatt megjelenik egy
+megjegyzés-mező (nem kötelező; Enterre / kikattintáskor menti, ez a `.keep` fájl szövege; bármikor átírható). A listában a
+kamera neve mellett ★, a megjegyzés a felvétel fölé víve látszik; a Szűrők között „csak ★ jelöltek”. A ★-ra kattintva lekerül a
+jelölés (a megjegyzés a mezőben marad, amíg másik felvételt nem választasz, így a ☆ visszaállítja). A sor végén a **🗑** törli
+az épp lejátszott felvételt, rákérdezés nélkül (megjelöltet nem lehet): a fájljai a `<gyökér>/.deleted/<kamera>/<dátum>/`
+alá kerülnek, a felvétel eltűnik a listából, a lejátszó a lista következő felvételére lép, és alul 8 másodpercig egy
+„Visszavonás” gomb visszarakja. A lomtárat a `rotate.py` üríti.
+
 **Nagy könyvtár:** a felvétel-index csak memóriában él (indulásnál a háttérben épül fel, lemezre nem ír). A lista az „Időszak” szűrő szerint (a `/player` alapból az utolsó 1 óra, a `/player/<kamera>` 24 óra; a kamera- és az időszak-szűrő nem öröklődik az előző látogatásból, a többi szűrő igen) csak a szükséges részt kéri le (`/api/list?since=<epoch>`, gzip-pel), az automatikus frissítés csak az utolsó óra utáni részt kérdezi újra (minden 20.-nál és kézi frissítésnél a teljes betöltött tartományt), a napfejlécre kattintva a nap összecsukható (hosszú időszaknál a legújabb nap kivételével alapból összecsukva).
 
 **Függőségek:** csak a Python standard könyvtára (a lejátszó és az élőkép is). Az `av` (PyAV) opcionális: csak akkor kell, ha egy felvételhez nincs `.mvmap`
 (a hosszát ilyenkor a konténerből olvassa). A `numpy` a lejátszóhoz nem kell.
+
+## Régi felvételek törlése (`rotate.py`)
+Cronból naponta futtatandó (pl. `15 3 * * * cd /home/rtspcam && python3 rotate.py rec >> log/rotate.log 2>&1`); a
+`--dry-run` csak kiírja, mit törölne. Minden futáskor: (1) a lomtárat (`.deleted/`) teljesen üríti; (2) kameránként törli a
+megőrzési időnél régebbi napok felvételeit (`keep_days`: 3 = a mai és az előző 2 nap), egy futásban kameránként legfeljebb 2 napot
+(`max_days_per_run`; leállás után a lemaradás pár nap alatt behozódik, egy elrontott óra pedig nem tud egyszerre mindent
+törölni; `--force`: korlát nélkül); (3) ha a lemezen kevesebb a szabad hely, mint `min_free_gb`, a legrégebbi felvételektől
+kezdve töröl (itt nincs napi korlát). Soha nem törli a megjelölt (`.keep`) felvételeket, és kameránként a 3 legfrissebb
+**létező** dátummappát (`min_days`; nem naptári nap: leállás után az utolsó 3 felvételes nap marad). Az üres dátummappákat
+törli. Beállítás: `configs/rotate.conf` (JSON, de nem `.json`, hogy egy „rotate” nevű kamera konfigjával se ütközzön; minden futáskor beolvassa; ha hibás, nem töröl semmit; ha egy kulcs hiányzik belőle,
+az engedékeny alapértékek: 30 nap, 1 GB szabad hely; ha nincs, az első futás létrehozza ezekkel, az összes kamerát felsorolva
+30 nappal – csak át kell írni), pl.:
+
+```json
+{"keep_days": 14, "keep_days_camera": {"Utca": 3, "Utca3": 3, "Szeru2": 30}, "min_free_gb": 10}
+```
 
 ## Élőkép (`/live`)
 A lejátszó fejlécében az `● Élő` gomb ide visz (mindig az összes kamerához). A rács a kamerákat egymás mellett mutatja (9 kameránál 3×3), a böngésző maga
