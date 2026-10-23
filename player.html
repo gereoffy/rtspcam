@@ -57,7 +57,8 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
 #tunepanel .tp-head{margin-bottom:2px !important}
 #tunepanel #tstats{margin-top:4px !important;font-size:13px !important}
 .stage.tuning{width:100%}
-.stage.tuning .wrap{width:min(100%,max(400px,calc((100vh - 460px)*var(--ar,1.333))));margin-left:auto;margin-right:auto}
+.stage.tuning .wrap{width:min(100%,max(400px,calc((100vh - 330px)*var(--ar,1.333))));margin-left:auto;margin-right:auto}
+.stage.tuning.szon .wrap{width:min(100%,max(400px,calc((100vh - 460px)*var(--ar,1.333))))}
 #tunepanel .ctl label{display:flex;justify-content:space-between;color:var(--fg);font:12px ui-monospace,Menlo,monospace;margin:2px 0 0;white-space:nowrap}
 #tunepanel .row{margin-top:6px}
 #tunepanel .ctl label b{color:var(--acc);font-variant-numeric:tabular-nums}
@@ -137,7 +138,7 @@ video{display:block;width:100%;height:100%;object-fit:contain;transform-origin:0
       <div class="tp-grid" id="tsliders"></div>
       <div class="row"><button id="drawz" title="húzz egy téglalapot a képen: ezt a területet a rögzítő figyelmen kívül hagyja">▭ Zóna rajzolása</button><span id="zlist"></span><button id="zclear">Zónák törlése</button></div>
       <div id="tstats" style="margin-top:8px;font-size:14px"></div>
-      <div class="row"><label style="margin:0;color:var(--dim)">Kamera neve <input type="text" id="tname" size="12"></label><button id="tload">Betöltés</button><button id="tsave" style="background:var(--acc);color:#04121f;border-color:var(--acc);font-weight:600">Mentés</button><span id="tmsg" style="color:var(--dim);font-size:12px"></span></div>    </div>
+      <div class="row"><label style="margin:0;color:var(--dim)">Kamera neve <input type="text" id="tname" size="12"></label><button id="tload">Betöltés</button><button id="tsave" style="background:var(--acc);color:#04121f;border-color:var(--acc);font-weight:600">Mentés</button><span id="tmsg" style="color:var(--dim);font-size:12px"></span><label class="chk" style="margin-left:auto;color:var(--dim);font-size:12px" title="a kockaméret-grafikon és a méretarány-küszöb (kísérleti; kikapcsolva a méretarány-küszöb sem számít)"><input type="checkbox" id="szon"> kockaméret-grafikon</label></div>    </div>
     <div class="row" id="settings">
       <label class="chk"><input type="checkbox" id="showov"> mozgástérkép</label>
       <select id="ovmode" title="mit rajzoljon a képre: kockák = a riasztó (piros) és a legnagyobb küszöb alatti (narancs) csoport; kockák + zaj = a többi mozgó cella is (sárga); vektorok = a mozgásvektorok (.mvvec; a vonal hossza a vektor hossza, a színe az iránya); összesített = az egész felvétel riasztó (piros) cellái egy képen: ahol gyakrabban riasztott, ott pirosabb és erősebb, a ritkább helyek sárgák és halványak"><option value="cells">kockák</option><option value="noise">kockák + zaj</option><option value="vec">vektorok</option><option value="heat">összesített</option></select>
@@ -768,7 +769,7 @@ function tuneRecompute(level) {
     const vals = Array.from(cluster).filter((x, i) => vecs.has[i]).sort((a, b) => a - b);
     tA = {cluster, active, vals, sizeMov: new Uint8Array(N), moving: new Int8Array(N), trig: new Uint8Array(N), over: new Uint8Array(N), segs: [], runs: [], yTop: 10}; }
   // state machine of the recorder over the analysed records (the others - key / skipped frames - leave it as it is)
-  const N = vecs.t.length, W = Math.max(2, TP.window), ring = new Int8Array(W), cells = vecs.gw * vecs.gh, sc = SZP.ratio > 0 && vecs.fbytes ? szCompute() : null;
+  const N = vecs.t.length, W = Math.max(2, TP.window), ring = new Int8Array(W), cells = vecs.gw * vecs.gh, sc = SZON && SZP.ratio > 0 && vecs.fbytes ? szCompute() : null;
   let ptr = 0, filled = 0, sum = 0, movingNow = false, writer = false, segStart = 0, lastMotion = -1e9, runStart = null; const segs = [], runs = [];
   for (let i = 0; i < N; i++) {
     const t = vecs.t[i] / 1000; let m = -1;
@@ -851,7 +852,7 @@ function drawOverlayTune() {
   drawVectors();
   const mv = tA.moving[i0], T = dur(), cl = vecs.has[i0] ? tA.cluster[i0] : null, t = vt();
   const inSeg = tA.segs.some(s2 => t >= s2[0] && t <= s2[1]);
-  $('hud').innerHTML = `${hudName()}${fmtClock(v.currentTime)} / ${fmtClock(T)} · kocka ${i0 + 1}/${vecs.t.length}` + (cl === null ? ' · (nem elemzett kocka)' : ` · klaszter <b>${cl}</b> / ${TP.min_cluster} · mozog <b>${(100 * tA.active[i0] / (vecs.gw * vecs.gh)).toFixed(0)}%</b> / limit ${(100 * TP.global_limit).toFixed(0)}%`) + (tA.over[i0] ? ' · <span style="color:#c26bff;font-weight:700">global_limit: nem számít</span>' : '') + (vecs.fbytes && SZP.ratio > 0 ? (() => { const c = szCompute(); return ` · méret <b>${c.med[i0] ? (c.a[i0] / c.med[i0]).toFixed(2) : '-'}×</b> / ${SZP.ratio}×`; })() : '') + (tA.sizeMov[i0] ? ' · <span style="color:#4aa8ff;font-weight:700">MÉRET-MOZGÁS</span>' : '') + (mv === 1 && !tA.sizeMov[i0] ? ' · <span style="color:#ff6b4d;font-weight:700">MOZGÁS-KOCKA</span>' : '') + (tA.trig[i0] ? ' · <span style="color:var(--rec);font-weight:700">⚑ riasztás (hangolt)</span>' : '') + (inSeg && !tA.trig[i0] ? ' · <span style="color:var(--rec)">felvenné</span>' : '');
+  $('hud').innerHTML = `${hudName()}${fmtClock(v.currentTime)} / ${fmtClock(T)} · kocka ${i0 + 1}/${vecs.t.length}` + (cl === null ? ' · (nem elemzett kocka)' : ` · klaszter <b>${cl}</b> / ${TP.min_cluster} · mozog <b>${(100 * tA.active[i0] / (vecs.gw * vecs.gh)).toFixed(0)}%</b> / limit ${(100 * TP.global_limit).toFixed(0)}%`) + (tA.over[i0] ? ' · <span style="color:#c26bff;font-weight:700">global_limit: nem számít</span>' : '') + (SZON && vecs.fbytes && SZP.ratio > 0 ? (() => { const c = szCompute(); return ` · méret <b>${c.med[i0] ? (c.a[i0] / c.med[i0]).toFixed(2) : '-'}×</b> / ${SZP.ratio}×`; })() : '') + (tA.sizeMov[i0] ? ' · <span style="color:#4aa8ff;font-weight:700">MÉRET-MOZGÁS</span>' : '') + (mv === 1 && !tA.sizeMov[i0] ? ' · <span style="color:#ff6b4d;font-weight:700">MOZGÁS-KOCKA</span>' : '') + (tA.trig[i0] ? ' · <span style="color:var(--rec);font-weight:700">⚑ riasztás (hangolt)</span>' : '') + (inSeg && !tA.trig[i0] ? ' · <span style="color:var(--rec)">felvenné</span>' : '');
 }
 // --- open / close ---
 function tuneMode(on) {
@@ -923,6 +924,12 @@ $('modebadge').textContent = 'rögzítő · .mvmap';
 // ---- frame-size chart (from the .mvvec, format 2): per-frame bytes, rolling median of the previous non-I frames, I frames / outliers clipped ----
 const sz = $('sz'), sctx = sz.getContext('2d'); let szCache = null;
 const SZP = {ratio: 0, scale: 10};
+// the frame size chart (and its size ratio threshold) only when switched on in the settings panel: experimental, off by default
+let SZON = false;
+try { SZON = localStorage.getItem('rc_szon') === '1'; } catch (e) {}
+$('szon').checked = SZON; $('stage').classList.toggle('szon', SZON);
+$('szon').addEventListener('change', () => { SZON = $('szon').checked; $('stage').classList.toggle('szon', SZON);
+  try { localStorage.setItem('rc_szon', SZON ? '1' : '0'); } catch (e) {} if (tuneOn && vecs) tuneRecompute(2); dirty = true; });
 try { SZP.ratio = +localStorage.getItem('rc_szratio') || 0; SZP.scale = +localStorage.getItem('rc_szscale') || 10; } catch (e) {}
 const SZ_K = 10;     // the scale top is SZ_K x the median; a frame above it is an I frame / outlier (off the scale, not part of the median)
 function szCompute() {
@@ -940,7 +947,7 @@ function szCompute() {
 }
 function drawSizes() {
   // (only with the settings panel)
-  const show = !!(tuneOn && vecs && vecs.fbytes && vecs.t.length); $('szbox').style.display = show ? '' : 'none'; if (!show) return;
+  const show = !!(SZON && tuneOn && vecs && vecs.fbytes && vecs.t.length); $('szbox').style.display = show ? '' : 'none'; if (!show) return;
   fit(sz); const W = sz.width, H = sz.height, dpr = devicePixelRatio || 1; sctx.clearRect(0, 0, W, H);
   const T = dur(); if (!cur || !T) return; const c = szCompute(), N = vecs.t.length, X = t => t / T * W, yTop = c.g * SZP.scale, Y = b => H - Math.min(1, b / yTop) * (H - 8), sm = tuneOn && tA ? tA.sizeMov : null;
   for (let i = 0; i < N; i++) { const x0 = Math.round(X(vecs.t[i] / 1000)), x1 = Math.max(x0 + 1, Math.round(X((i + 1 < N ? vecs.t[i + 1] : vecs.t[i] + 40) / 1000))), y = Math.round(Y(c.a[i]));
