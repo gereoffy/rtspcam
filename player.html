@@ -167,7 +167,13 @@ function fillCameras() {
 // and every 20th automatic refresh (and the manual one) reloads the whole loaded range, which also drops deleted recordings.
 let loadedFrom = 0, autoCount = 0, refreshing = false;            // loadedFrom: epoch seconds the items start at, 0 = everything
 const perStart = () => { const h = +$('fper').value; return h ? Date.now() / 1000 - h * 3600 : 0; };
-async function fetchItems(since) { return (await fetch('/api/list' + (since ? '?since=' + Math.floor(since) : ''))).json(); }
+// (deletedIds: what was deleted on this page; a list refresh that was already under way while deleting still has it, it
+// must not bring it back)
+const deletedIds = new Set();
+async function fetchItems(since) {
+  const l = await (await fetch('/api/list' + (since ? '?since=' + Math.floor(since) : ''))).json();
+  return deletedIds.size ? l.filter(i => !deletedIds.has(i.id)) : l;
+}
 async function ensureRange() {                                    // the period was widened: load the older part too
   const need = perStart();
   if (loadedFrom !== 0 && (need === 0 || need < loadedFrom)) { $('count').textContent = 'betöltés…'; items = await fetchItems(need); loadedFrom = need; fillCameras(); }
@@ -263,7 +269,7 @@ $('delbtn').onclick = async () => {
   v.pause(); v.removeAttribute('src'); v.load();                  // (lets the file go)
   const r = await fetch('/api/delete?id=' + encodeURIComponent(it.id), {method: 'POST'});
   if (!r.ok) { $('info').textContent = 'A törlés nem sikerült: ' + (await r.text()); $('inforow').style.display = ''; select(it, false); return; }
-  items = items.filter(x => x !== it); relist();
+  deletedIds.add(it.id); items = items.filter(x => x !== it); relist();
   undoItem = it; $('toastmsg').textContent = 'Törölve: ' + it.name; $('toast').style.display = 'flex';
   clearTimeout(undoTimer); undoTimer = setTimeout(() => { $('toast').style.display = 'none'; undoItem = null; }, 8000);
   if (nxt) select(nxt, true);
@@ -275,7 +281,7 @@ $('undo').onclick = async () => {
   clearTimeout(undoTimer); $('toast').style.display = 'none'; undoItem = null;
   const r = await fetch('/api/undelete?id=' + encodeURIComponent(it.id), {method: 'POST'});
   if (!r.ok) { $('info').textContent = 'A visszaállítás nem sikerült: ' + (await r.text()); $('inforow').style.display = ''; return; }
-  items.push(it); relist(); select(it, true);
+  deletedIds.delete(it.id); if (!items.some(x => x.id === it.id)) items.push(it); relist(); select(it, true);
 };
 // ---- map ----------------------------------------------------------------------
 // frames without a score: 1 = key frame, 16 = not analysed (reference too far back, rtspcam --max-ref-dist)
