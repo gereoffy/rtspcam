@@ -66,6 +66,14 @@ adja ki (`flatmp4.py`): az első kéréskor a töredékek fejléceiből felépí
 és ezt az eredeti, változatlan fájl elé teszi egy `mdat` fejléccel (egyetlen fix eltolás; az utolsó 16 felvétel indexe
 memóriában marad). A fájlok nem változnak; a letöltött fájl is hagyományos MP4. `--no-flat`: a régi, változatlan kiszolgálás.
 
+**Link előnézet (iMessage stb.):** a kimásolt `/video?id=…` link előnézete a felvétel méretével arányosan késik: az Apple
+LinkPresentation (iMessage, Mac) egy `bytes=0-1` próbakérés után **a teljes fájlt letölti**, és csak utána mutat képet
+(Macen mérve, a fájl formátumától – töredékes vagy hagyományos MP4 – és a hangsávtól függetlenül). A telephely ~10 Mbit-es
+feltöltésén (~1 MB/s) egy 40 s-os, 8,4 MB-os felvétel ~8–10 s, egy 2,5 MB-os ~5 s; a régi ZoneMinder-linkek azért voltak
+gyorsak (~1 s), mert a Xeonról (193.224.177.9, ~30 Mbit) jöttek, és fele akkora bitrátával. Gyorsítani csak egy előnézeti
+képes HTML oldallal lehetne (`og:image`), amit a lejátszó most nem készít. A szerver a `HEAD` kérésre is válaszol (a
+linkelőnézetek és letöltők gyakran ezzel kezdenek).
+
 **Nagy könyvtár:** a felvétel-index csak memóriában él (indulásnál a háttérben épül fel, lemezre nem ír). A lista az „Időszak” szűrő szerint (a `/player` alapból az utolsó 1 óra, a `/player/<kamera>` 24 óra; a kamera- és az időszak-szűrő nem öröklődik az előző látogatásból, a többi szűrő igen) csak a szükséges részt kéri le (`/api/list?since=<epoch>`, gzip-pel), az automatikus frissítés csak az utolsó óra utáni részt kérdezi újra (minden 20.-nál és kézi frissítésnél a teljes betöltött tartományt), a napfejlécre kattintva a nap összecsukható (hosszú időszaknál a legújabb nap kivételével alapból összecsukva).
 
 **Függőségek:** csak a Python standard könyvtára (a lejátszó és az élőkép is). Az `av` (PyAV) opcionális: csak akkor kell, ha egy felvételhez nincs `.mvmap`
