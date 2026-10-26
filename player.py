@@ -38,6 +38,7 @@ try:                      # only needed to time recordings without a map
 except ImportError:
     av = None
 
+import flatmp4
 import mvmap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -45,6 +46,7 @@ RTSPCAM = os.path.join(HERE, "src", "rtspcam")        # the recorder binary: fil
 GENVEC_LOCKS = {}                                 # one generation per file at a time
 GENVEC_SLOTS = threading.Semaphore(2)             # and at most two at once (it is CPU work)
 LIVE = None                                       # liveview.Live when --live-dir is given
+FLAT = flatmp4.Cache(16)                          # /video: the recordings as plain MP4 (Firefox seeks at once); None: --no-flat
 CONFIG_DIR = os.path.join(HERE, "configs")        # the tuning panel saves/loads configs/<camera>.json here (see --config-dir)
 TUNE_KEYS = ("mv_min", "min_cluster", "global_limit", "window", "trigger_frames", "pre_roll", "post_roll", "ignore")
 # <name>_<HHMMSS>.mp4 (the recorder); any other *.mp4 is accepted too, its time of day then comes from the file time
@@ -415,7 +417,11 @@ def make_handler(lib):
             self.send_bytes(b"not found", "text/plain", 404)
 
         def send_file(self, path, download=False):
-            size = os.path.getsize(path)
+            # a fragmented recording goes as a plain MP4: the new header (ftyp + whole moov + mdat header, built on the first
+            # request, the last 16 kept) and then the original file unchanged (see flatmp4.py); otherwise the file as it is
+            head = FLAT.get(path) if FLAT is not None else None
+            hl = len(head) if head else 0
+            size = hl + os.path.getsize(path)
             start, end, code = 0, size - 1, 200
             m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
             if m:
@@ -438,8 +444,11 @@ def make_handler(lib):
             if code == 206:
                 self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
             self.end_headers()
+            if start < hl:
+                self.wfile.write(head[start:min(end + 1, hl)])
+                start = hl
             with open(path, "rb") as fh:
-                fh.seek(start)
+                fh.seek(start - hl)
                 left = end - start + 1
                 while left > 0:
                     chunk = fh.read(min(1 << 20, left))
@@ -452,7 +461,7 @@ def make_handler(lib):
 
 
 def main():
-    global CONFIG_DIR, LIVE, RTSPCAM
+    global CONFIG_DIR, LIVE, RTSPCAM, FLAT
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("root", help="recordings root (the -o directory of the recorder)")
     ap.add_argument("--port", type=int, default=8780)
@@ -463,9 +472,13 @@ def main():
                                                        "gets it made with `rtspcam --vectors FILE.mp4` (default: src/rtspcam)")
     ap.add_argument("--live-dir", help="the --live directory of the C recorders: serves the live view too (/live, /status), "
                                        "the same one liveview.py serves on its own")
+    ap.add_argument("--no-flat", action="store_true", help="send the recordings as they are (fragmented MP4), not as plain MP4 "
+                                                           "(Firefox then seeks only as far as it has downloaded)")
     ap.add_argument("--cameras", help="with --live-dir: comma separated order of the cameras in the live grid "
                                       "(default: the sockets, sorted)")
     a = ap.parse_args()
+    if a.no_flat:
+        FLAT = None
     CONFIG_DIR = a.config_dir
     RTSPCAM = a.rtspcam
     if a.cameras and not a.live_dir:

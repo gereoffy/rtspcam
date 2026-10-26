@@ -60,6 +60,12 @@ az épp lejátszott felvételt, rákérdezés nélkül (megjelöltet nem lehet):
 alá kerülnek, a felvétel eltűnik a listából, a lejátszó a lista következő felvételére lép, és alul 8 másodpercig egy
 „Visszavonás” gomb visszarakja. A lomtárat a `rotate.py` üríti.
 
+**Tekerés lassú vonalon:** a rögzítő töredékes MP4-et ír (összeomlásbiztos), amiben a fájl elején nincs index; a Firefox
+ilyenkor tekeréskor nem kéri le a fájl közepét, hanem sorban tölti odáig. Ezért a lejátszó a felvételt hagyományos MP4-ként
+adja ki (`flatmp4.py`): az első kéréskor a töredékek fejléceiből felépíti a teljes indexet (`moov`; 6 perc ≈ 75 KB, ~20 ms),
+és ezt az eredeti, változatlan fájl elé teszi egy `mdat` fejléccel (egyetlen fix eltolás; az utolsó 16 felvétel indexe
+memóriában marad). A fájlok nem változnak; a letöltött fájl is hagyományos MP4. `--no-flat`: a régi, változatlan kiszolgálás.
+
 **Nagy könyvtár:** a felvétel-index csak memóriában él (indulásnál a háttérben épül fel, lemezre nem ír). A lista az „Időszak” szűrő szerint (a `/player` alapból az utolsó 1 óra, a `/player/<kamera>` 24 óra; a kamera- és az időszak-szűrő nem öröklődik az előző látogatásból, a többi szűrő igen) csak a szükséges részt kéri le (`/api/list?since=<epoch>`, gzip-pel), az automatikus frissítés csak az utolsó óra utáni részt kérdezi újra (minden 20.-nál és kézi frissítésnél a teljes betöltött tartományt), a napfejlécre kattintva a nap összecsukható (hosszú időszaknál a legújabb nap kivételével alapból összecsukva).
 
 **Függőségek:** csak a Python standard könyvtára (a lejátszó és az élőkép is). Az `av` (PyAV) opcionális: csak akkor kell, ha egy felvételhez nincs `.mvmap`
