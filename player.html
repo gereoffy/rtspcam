@@ -375,6 +375,7 @@ async function select(it, setHash) {
   try { await v.play(); } catch (e) {}
 }
 let startAt = 0;                                    // where select() starts the recording (seconds)
+v.addEventListener('progress', () => { dirty = true; });       // (the downloaded part on the timeline)
 v.addEventListener('loadeddata', () => { $('msg').style.display = 'none'; loading = false; dirty = true; });
 v.addEventListener('loadedmetadata', () => {
   setAspect(v.videoWidth, v.videoHeight);
@@ -693,6 +694,16 @@ function drawHeat(h, w, hh) {
     octx.fillRect(x0, y0, Math.round(ox + (gx + 1) * 16 * s) - x0, Math.round(oy + (gy + 1) * 16 * s) - y0); }
 }
 const fmtClock = s => { s = Math.max(0, s || 0); return Math.floor(s/60) + ':' + (s % 60).toFixed(1).padStart(4, '0'); };
+// what the browser has downloaded so far (a long recording over a slow line): a thin light strip along the bottom of the
+// timeline, only while the download is not complete (the <video>'s buffered ranges; "progress" events redraw it)
+function drawBuffered(X, W, H, T) {
+  const b = v.buffered; if (!b.length) return;
+  if (b.length === 1 && b.start(0) <= 0.5 && b.end(0) >= T - 0.5) return;     // all there: nothing to show
+  const h = Math.max(3, Math.round(3 * (devicePixelRatio || 1)));
+  tctx.fillStyle = 'rgba(0,0,0,.55)'; tctx.fillRect(0, H - h, W, h);
+  tctx.fillStyle = 'rgba(220,226,235,.85)';
+  for (let i = 0; i < b.length; i++) { const x0 = Math.round(X(b.start(i))); tctx.fillRect(x0, H - h, Math.max(1, Math.round(X(Math.min(T, b.end(i)))) - x0), h); }
+}
 function drawTimeline() {
   if (tuneOn && vecs) return drawTuneTimeline();
   fit(tl); const W = tl.width, H = tl.height; tctx.clearRect(0, 0, W, H);
@@ -720,6 +731,7 @@ function drawTimeline() {
     const ty = H - Math.min(1, thr / yTop) * (H - 8);
     tctx.strokeStyle = '#ffd23f'; tctx.setLineDash([5, 4]); tctx.beginPath(); tctx.moveTo(0, ty); tctx.lineTo(W, ty); tctx.stroke(); tctx.setLineDash([]);
   }
+  drawBuffered(X, W, H, T);
   tctx.fillStyle = '#fff'; tctx.fillRect(X(v.currentTime), 0, 2, H);
 }
 // ================= tuning mode: everything is computed from the .mvvec and the sliders (the .mvmap is not used) =================
@@ -823,6 +835,7 @@ function drawTuneTimeline() {
   tctx.fillStyle = '#ffd23f'; tctx.font = `${11 * dpr}px system-ui`; tctx.fillText('küszöb (hangolt)', 4, Math.max(12 * dpr, ty - 4));
   if (tA.over.some(x => x)) { tctx.fillStyle = '#c26bff'; tctx.fillText('■ a kép mozgó része ≥ global_limit: a kocka nem számít', 4, 20 * dpr); }
   if (tA.sizeMov.some(x => x)) { tctx.fillStyle = '#4aa8ff'; tctx.fillText('■ csak a kockaméret miatt mozgásos', 4, 34 * dpr); }
+  drawBuffered(X, W, H, T);
   tctx.fillStyle = '#fff'; tctx.fillRect(X(v.currentTime), 0, 2, H);
 }
 function drawOverlayTune() {
