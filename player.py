@@ -295,7 +295,8 @@ def make_handler(lib):
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
             self.end_headers()
-            self.wfile.write(data)
+            if self.command != "HEAD":
+                self.wfile.write(data)
 
         def cfg_path(self, name):
             return cfg_path(name)
@@ -340,6 +341,13 @@ def make_handler(lib):
                 except Exception as e:
                     return self.send_bytes(str(e).encode(), "text/plain", 400)
             self.send_bytes(b"not found", "text/plain", 404)
+
+        def do_HEAD(self):
+            """the headers of a GET without the body: link previews (iMessage...) ask this first. Not for the live view
+            (its streams never end)"""
+            if urlparse(self.path).path.startswith(("/live", "/status", "/m")):
+                return self.send_bytes(b"", "text/plain", 405)
+            self.do_GET()
 
         def do_GET(self):
             u = urlparse(self.path)
@@ -444,6 +452,8 @@ def make_handler(lib):
             if code == 206:
                 self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
             self.end_headers()
+            if self.command == "HEAD":
+                return
             if start < hl:
                 self.wfile.write(head[start:min(end + 1, hl)])
                 start = hl
