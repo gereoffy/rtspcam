@@ -463,7 +463,9 @@ $('wrap').addEventListener('dblclick', () => { $('autozoom').checked = false; zo
 // size; the sequence of views (with a zoom-out to the whole picture before, after and in the gaps of the motion) is sampled every 40 ms and smoothed with a Gaussian
 // (the whole clip is known, so the camera "looks ahead"), then played back by time. A manual zoom or drag switches it off.
 let follow = null, followSig = '';
-const FOLLOW = {step: 0.04, sigma: 0.75, margin: 2.0, minFrac: 0.25};
+// pre: the view already follows a motion that is below the alarm threshold, from this part of it on (the largest group, the
+// orange cells: a person comes into view before the alarm)
+const FOLLOW = {step: 0.04, sigma: 0.75, margin: 2.0, minFrac: 0.25, pre: 0.4};
 // bounding box of the cells, without the outermost 3% on each side (a few stray cells far from the rest must not blow the box up)
 function trimBox(xs, ys) {
   const n = xs.length; if (!n) return null;
@@ -474,14 +476,17 @@ function followPoints() {
   const pts = []; let W = 0, H = 0;
   if (tuneOn && vecs && tA) {
     W = vecs.w; H = vecs.h;
-    for (let i = 0; i < vecs.t.length; i++) { if (!vecs.has[i] || tA.over[i] || tA.cluster[i] < TP.min_cluster) continue;
-      const r = tuneAnalyze(i, true), xs = [], ys = [];
-      for (const idx of r.act) if (r.sizes[tlab[idx]] >= TP.min_cluster) { xs.push(((idx % tGW) - 1) * 16); ys.push((((idx / tGW) | 0) - 1) * 16); }
+    for (let i = 0; i < vecs.t.length; i++) { if (!vecs.has[i] || tA.over[i] || tA.cluster[i] < FOLLOW.pre * TP.min_cluster) continue;
+      const r = tuneAnalyze(i, true), xs = [], ys = [], red = r.best >= TP.min_cluster;     // below the threshold: the largest group
+      for (const idx of r.act) if (red ? r.sizes[tlab[idx]] >= TP.min_cluster : tlab[idx] === r.bestId) { xs.push(((idx % tGW) - 1) * 16); ys.push((((idx / tGW) | 0) - 1) * 16); }
       const b = trimBox(xs, ys); if (b) pts.push({t: vecs.t[i] / 1000, ...b}); }
   } else if (!tuneOn && hdr && tms.length) {
     W = hdr.w; H = hdr.h;
     for (let i = 0; i < tms.length; i++) { if ((fl[i] & SKIPF) || !cnt[i]) continue; const xs = [], ys = [];
-      for (let k = 0; k < cnt[i]; k++) { if (bodyDv.getUint8(off[i] + 3 * k + 2) !== 3) continue;
+      // the red cells; without them the orange ones (the largest group below the threshold) when it is at least FOLLOW.pre of it
+      let red = false; for (let k = 0; k < cnt[i] && !red; k++) red = bodyDv.getUint8(off[i] + 3 * k + 2) === 3;
+      const lvl = red ? 3 : metric[i] >= FOLLOW.pre * thr ? 2 : 0; if (!lvl) continue;
+      for (let k = 0; k < cnt[i]; k++) { if (bodyDv.getUint8(off[i] + 3 * k + 2) !== lvl) continue;
         const c = bodyDv.getUint16(off[i] + 3 * k, true); xs.push((c % hdr.gw) * 16); ys.push(Math.floor(c / hdr.gw) * 16); }
       const b = trimBox(xs, ys); if (b) pts.push({t: tms[i] / 1000, ...b}); }
   }
