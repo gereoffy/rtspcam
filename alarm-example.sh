@@ -20,10 +20,12 @@ export LC_ALL=C.UTF-8
 MAILTO="you@example.com"                     # who gets the mail
 PLAYER="http://player.example.com:8888"      # the player as the recipients reach it
 COOLDOWN=10                                  # minutes between two mails of the same camera
-# the cameras' still picture addresses: one "<camera> <url>" per line, the user and password in the URL (curl --anyauth
-# picks digest or basic); the addresses come from "python3 onvif_encoder.py <camera> url" (the "snapshot:" lines), e.g.
-#   Szeru2 http://admin:PASSWORD@192.168.1.108/cgi-bin/snapshot.cgi?channel=1
-#   Hikvision http://admin:PASSWORD@192.168.1.64/ISAPI/Streaming/channels/101/picture
+# the cameras' still picture addresses: one "<camera> <url> [scale]" per line, the user and password in the URL (curl
+# --anyauth picks digest or basic); scale: 1/2, 1/4 or 1/8 to shrink the picture (djpeg -scale), none or 1: as it is.
+# The addresses come from "python3 onvif_encoder.py <camera> url" (the "snapshot:" lines), e.g.
+#   Szeru2 http://admin:PASSWORD@192.168.1.108/cgi-bin/snapshot.cgi?channel=1 1/4
+#   Hikvision http://admin:PASSWORD@192.168.1.64/ISAPI/Streaming/channels/101/picture 1/4
+#   Eteto http://admin:PASSWORD@192.168.1.65/onvifsnapshot/media_service/snapshot?channel=1
 # a camera that is not listed gets no picture (the mail goes without it)
 SNAPSHOTS=/home/rtspcam/snapshots.url
 
@@ -33,14 +35,14 @@ path="$2"
 tmp=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmp"' EXIT
 
-# the picture: from the camera; a big one shrunk (from 1600 px wide 1/4: 1920x1080 -> 480x270 ~40 KB, from 960 px 1/2),
-# a small one (e.g. 640x480) as it is
+# the picture: from the camera, shrunk as snapshots.url says (1/4: 1920x1080 -> 480x270, ~40 KB)
 jpg=""
-url=$(awk -v c="$cam" '$1 == c {print $2; exit}' "$SNAPSHOTS" 2>/dev/null)
+line=$(awk -v c="$cam" '$1 == c {print $2, $3; exit}' "$SNAPSHOTS" 2>/dev/null)
+url=${line%% *}
+scale=${line#* }
+[ "$scale" = "$line" ] && scale=""
 if [ -n "$url" ] && curl -s -f --anyauth --max-time 5 -o "$tmp/big.jpg" "$url"; then
-    w=$(file -b "$tmp/big.jpg" | sed -n 's/.*[ ,]\([0-9][0-9]*\)x[0-9][0-9]*.*/\1/p')
-    if [ "${w:-0}" -ge 1600 ]; then scale=1/4; elif [ "${w:-0}" -ge 960 ]; then scale=1/2; else scale=""; fi
-    if [ -z "$scale" ]; then
+    if [ -z "$scale" ] || [ "$scale" = 1 ]; then
         jpg="$tmp/big.jpg"
     elif djpeg -scale $scale "$tmp/big.jpg" | cjpeg -quality 80 > "$tmp/small.jpg" 2>/dev/null && [ -s "$tmp/small.jpg" ]; then
         jpg="$tmp/small.jpg"

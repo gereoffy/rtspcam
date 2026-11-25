@@ -83,9 +83,9 @@ linkelőnézetek és letöltők gyakran ezzel kezdenek).
 A rögzítő `--on-alarm PARANCS` kapcsolóval (vagy a kamera konfigjában `"on_alarm": "..."`) a riasztással induló felvétel
 elején a háttérben lefuttat egy parancsot, nem vár rá: `$1` = a kamera neve, `$2` = a felvétel útvonala (`.mp4`; amíg tart,
 `.part`-ként íródik). A minta, `alarm-example.sh`: állóképet kér a kamerától, közvetlenül, ONVIF nélkül (a címe a
-`snapshots.url` fájlban, soronként `<kamera> <URL>`, a felhasználóval és jelszóval az URL-ben; `curl --anyauth`; a címet az
-`onvif_encoder.py <kamera> url` kiírja), a nagyot kicsinyíti (`djpeg -scale 1/4` vagy `1/2` | `cjpeg`: a JPEG DCT-jéből, olcsó; 1920×1080 →
-480×270, ~40 KB; csomag: `libjpeg-turbo-progs`; a kicsi, pl. 640×480, marad), a felvétel mellé menti `<név>.jpg`-ként (a lejátszó törlése és a
+`snapshots.url` fájlban, soronként `<kamera> <URL> [kicsinyítés]`, a felhasználóval és jelszóval az URL-ben; `curl --anyauth`; a címet az
+`onvif_encoder.py <kamera> url` kiírja), a sorban megadott mértékben kicsinyíti (`1/2`, `1/4`, `1/8`; `djpeg -scale` | `cjpeg`: a JPEG DCT-jéből, olcsó; 1920×1080 →
+480×270, ~40 KB; csomag: `libjpeg-turbo-progs`; mező nélkül a kép marad, pl. a 640×480-as), a felvétel mellé menti `<név>.jpg`-ként (a lejátszó törlése és a
 `rotate.py` a felvétellel együtt kezeli), és `mailx`-szel elküldi a lejátszó linkjével (`/player/<kamera>#<id>`);
 minden riasztásnál lefut (minden felvétel kap képet), de levelet kameránként legfeljebb 10 percenként küld (`COOLDOWN` a szkriptben). Állókép nélküli kameráról (kínai HS-Camera) kép nélküli levél megy.
 
