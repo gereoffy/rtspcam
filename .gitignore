@@ -1,5 +1,8 @@
 # local test data and camera configs (not for the repository)
 configs/
+# camera addresses with passwords (cameras.url.SAMPLE is the example)
+cameras.url
+snapshots.url
 tune_clips/
 # recordings and the live view sockets (start_live.sh: OUT=rec, LIVE=rclive)
 rec/
