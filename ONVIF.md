@@ -15,6 +15,23 @@ streamenként (fő- és alstream) kiírja a felbontást, a kódolást, az fps-t 
 így egyből mehet a `cameras.url`-be. Ha a kamera a gyári címét írja bele (olcsó firmware-eknél előfordul), azt arra a címre cseréli, amin
 elértük (stderr-en jelzi). Név/jelszó nélkül (`192.168.1.64 url`) azonosítás nélkül kérdez; ha a kamera azonosítást kér, ezt kiírja.
 
+## Állókép (snapshot)
+
+A legtöbb kamera egy külön HTTP címen állóképet (JPEG) is ad – ezt a kamera készíti, a gépet nem terheli (pl. e-mailes
+riasztáshoz). A címet az ONVIF `GetSnapshotUri` adja meg; a `url` parancs a stream-URL-ek mellett ezt is kiírja, és rögtön
+le is tölt rajta egy képet (HTTP digest vagy basic azonosítással, a kamera felhasználójával), így látszik, működik-e:
+
+    python3 onvif_encoder.py Utca url
+    ...
+        snapshot: http://192.168.3.21/cgi-bin/snapshot.cgi?channel=1  -> OK, image/jpeg, 312 KB, 1920x1080
+
+A `snapshot` parancs fájlba menti (alapból `<kamera>.jpg`, vagy `--out FILE`):
+
+    python3 onvif_encoder.py Utca snapshot --out utca.jpg
+
+Ha a kamera nem ad snapshot-URL-t (olcsó firmware-eknél előfordul), a `url` ezt írja ki („no snapshot URL” vagy a
+`GetSnapshotUri` hibája).
+
 ## Kódoló
 
 - `onvif_encoder.py KAMERA get` – a streamek beállításai (felbontás, fps, bitráta, minőség, GOP, profil).

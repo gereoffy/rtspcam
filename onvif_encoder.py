@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """onvif_encoder - read or set a camera's video encoder settings over ONVIF (standard library only).
 
-    onvif_encoder.py CAMERA url           (the RTSP URLs of the streams: for a new camera, e.g. user:password@192.168.1.64)
+    onvif_encoder.py CAMERA url           (the RTSP URLs of the streams: for a new camera, e.g. user:password@192.168.1.64;
+                                           and the still picture (snapshot) URL, tried at once)
+    onvif_encoder.py CAMERA snapshot [--out FILE]   (a still picture from the camera into FILE, default <camera>.jpg)
     onvif_encoder.py CAMERA get
     onvif_encoder.py CAMERA options       (what the camera allows: resolutions, fps, GOP, quality per stream)
     onvif_encoder.py CAMERA time          (the camera's clock, time zone, DST flag; against this machine)
@@ -39,7 +41,10 @@ import hashlib
 import os
 import re
 import socket
+import struct
 import sys
+import urllib.error
+import urllib.request
 from urllib.parse import quote, unquote, urlsplit
 
 NS = ('xmlns:s="http://www.w3.org/2003/05/soap-envelope" xmlns:tt="http://www.onvif.org/ver10/schema" '
@@ -326,6 +331,49 @@ def camera_from(arg, cameras_file, user=None, password=None):
     return cam
 
 
+def snapshot_url(cam, token):
+    """the still picture URL of a profile (GetSnapshotUri), the host replaced by the one we reached; None if not offered"""
+    r = cam.call(cam.media, "<trt:GetSnapshotUri><trt:ProfileToken>%s</trt:ProfileToken></trt:GetSnapshotUri>" % token)
+    m = re.search(r"<(?:\w+:)?Uri>\s*([^<]*?)\s*</(?:\w+:)?Uri>", r)
+    uri = (m.group(1) if m else "").replace("&amp;", "&")
+    u = urlsplit(uri)
+    if not u.scheme.startswith("http") or not u.hostname:
+        return None
+    host = "[%s]" % cam.host if ":" in cam.host else cam.host
+    return "%s://%s%s%s" % (u.scheme, host, ":%d" % u.port if u.port else "", uri[uri.index(u.netloc) + len(u.netloc):])
+
+
+def jpeg_size(data):
+    """(width, height) of a JPEG, or None"""
+    i = 2
+    while data[:2] == b"\xff\xd8" and i + 9 < len(data):
+        if data[i] != 0xFF:
+            return None
+        mk, n = data[i + 1], struct.unpack(">H", data[i + 2:i + 4])[0]
+        if 0xC0 <= mk <= 0xCF and mk not in (0xC4, 0xC8, 0xCC):
+            h, w = struct.unpack(">HH", data[i + 5:i + 9])
+            return w, h
+        i += 2 + n
+    return None
+
+
+def fetch_snapshot(cam, url, timeout=10):
+    """the picture behind a snapshot URL (HTTP digest or basic authentication with the camera's user): (bytes, note)"""
+    pm = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+    pm.add_password(None, url, cam.user, cam.password)
+    opener = urllib.request.build_opener(urllib.request.HTTPDigestAuthHandler(pm), urllib.request.HTTPBasicAuthHandler(pm))
+    try:
+        r = opener.open(url, timeout=timeout)
+        data = r.read()
+    except urllib.error.HTTPError as e:
+        return None, "HTTP %d %s" % (e.code, e.reason)
+    except (OSError, ValueError) as e:
+        return None, str(e)
+    wh = jpeg_size(data)
+    return data, "%s, %d KB%s" % (r.headers.get("Content-Type", "?"), len(data) // 1024, ", %dx%d" % wh if wh else
+                                  " (not a JPEG)" if data[:2] != b"\xff\xd8" else "")
+
+
 def stream_urls(cam):
     """[(profile token, name, "H264 1920x1080 15 fps", rtsp url with the credentials)] (GetProfiles, GetStreamUri)"""
     text = cam.call(cam.media, "<trt:GetProfiles/>")
@@ -375,8 +423,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("camera", help="rtsp://user:password@host/..., user:password@host, a name from cameras.url "
                     "or just the host (with --user/--password)")
-    ap.add_argument("action", choices=["url", "get", "set", "options", "time", "settime"],
-                    help="url: the RTSP URLs of the streams; get: the settings; set: change them; options: what the camera allows per stream; "
+    ap.add_argument("action", choices=["url", "snapshot", "get", "set", "options", "time", "settime"],
+                    help="url: the RTSP URLs of the streams (and the snapshot URL, tried); snapshot: a still picture into --out; get: the settings; set: change them; options: what the camera allows per stream; "
                          "time: the camera's clock and time zone; settime: set the time zone (--tz, --fixed, --dst)")
     ap.add_argument("--tz", help="settime: time zone, e.g. %s (POSIX, with the DST rules: for cameras that "
                                  "follow them) or GMT+01:00" % HU_TZ)
@@ -385,6 +433,7 @@ def main():
                     "run): for cameras that get DST wrong; run it daily from cron")
     ap.add_argument("--dst", choices=["on", "off"], help="settime: the daylight saving flag")
     ap.add_argument("--cameras", default=os.path.join(here, "cameras.url"))
+    ap.add_argument("--out", help="snapshot: the file to write (default: <camera>.jpg)")
     ap.add_argument("--user", help="ONVIF user name (instead of the one in the URL / cameras.url)")
     ap.add_argument("--password", help="ONVIF password")
     ap.add_argument("--port", type=int, help="ONVIF HTTP port (default: try %s)" % ", ".join(map(str, PORTS)))
@@ -419,15 +468,37 @@ def main():
         sys.exit("ONVIF error: %s" % "; ".join(errors))
     if not a.port and cam.port != PORTS[0]:
         print("note: ONVIF on port %d" % cam.port, file=sys.stderr)
-    if a.action == "url":
+    if a.action in ("url", "snapshot"):
         try:
             urls = stream_urls(cam)
         except (OSError, RuntimeError) as e:
             sys.exit("ONVIF error: %s" % e)
         if not urls:
             sys.exit("the camera reported no media profile")
+        seen = {}
         for tok, name, info, uri in urls:
-            print("%s (%s): %s\n    %s" % (tok, name, info, uri))
+            if a.action == "url":
+                print("%s (%s): %s\n    %s" % (tok, name, info, uri))
+            try:
+                snap = snapshot_url(cam, tok)
+            except (OSError, RuntimeError) as e:
+                snap, note = None, "GetSnapshotUri: %s" % (str(e).split("\n")[0][:120])
+            else:
+                note = None if snap else "no snapshot URL"
+            if snap and snap not in seen:                   # (often the same for every profile: fetched once)
+                seen[snap] = fetch_snapshot(cam, snap)
+            if a.action == "url":
+                print("    snapshot: %s" % ("%s  -> %s" % (snap, "OK, " + seen[snap][1] if seen[snap][0] else seen[snap][1])
+                                            if snap else note))
+        if a.action == "snapshot":
+            good = [(u, d) for u, (d, _) in seen.items() if d and d[:2] == b"\xff\xd8"]
+            if not good:
+                sys.exit("no still picture: %s" % ("; ".join("%s -> %s" % (u, n) for u, (_, n) in seen.items()) or
+                                                   "the camera offers no snapshot URL"))
+            out = a.out or re.sub(r"[^\w.-]", "_", a.camera.split("@")[-1].split("/")[0]) + ".jpg"
+            with open(out, "wb") as fh:
+                fh.write(good[0][1])
+            print("%s: %s" % (out, seen[good[0][0]][1]))
         return
     if a.action in ("time", "settime"):
         try:
