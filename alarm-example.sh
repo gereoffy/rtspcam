@@ -8,7 +8,7 @@
 #     $1 = the camera name, $2 = the recording's path (rec/<camera>/<date>/<camera>_<HHMMSS>.mp4; it is written as
 #          <path>.part until the recording ends)
 # What it does: a still picture from the camera (onvif_encoder.py snapshot: ONVIF, or the Hikvision/Dahua address),
-# shrunk to 1/4 (djpeg -scale: cheap, from the JPEG's DCT, package libjpeg-turbo-progs) and saved next to the recording
+# a big one shrunk (djpeg -scale: cheap, from the JPEG's DCT, package libjpeg-turbo-progs) and saved next to the recording
 # as <name>.jpg (the player and rotate.py handle it with the recording), then an e-mail with the picture and a link to
 # the recording in the player. It runs at every alarm (every recording gets its picture); the mail goes at most once per
 # camera per COOLDOWN minutes. POSIX sh (dash on Ubuntu), no bash needed.
@@ -24,12 +24,18 @@ path="$2"
 tmp=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmp"' EXIT
 
-# the picture: from the camera, 1/4 size (1920x1080 -> 480x270, ~40 KB)
+# the picture: from the camera; a big one shrunk (from 1600 px wide 1/4: 1920x1080 -> 480x270 ~40 KB, from 960 px 1/2),
+# a small one (e.g. 640x480) as it is
 jpg=""
-if python3 "$HERE/onvif_encoder.py" "$cam" snapshot --cameras "$HERE/cameras.url" --out "$tmp/big.jpg" >/dev/null 2>&1 &&
-   djpeg -scale 1/4 "$tmp/big.jpg" | cjpeg -quality 80 > "$tmp/small.jpg" 2>/dev/null && [ -s "$tmp/small.jpg" ]; then
-    jpg="$tmp/small.jpg"
-    [ -n "$path" ] && cp "$jpg" "${path%.mp4}.jpg"            # next to the recording
+if python3 "$HERE/onvif_encoder.py" "$cam" snapshot --cameras "$HERE/cameras.url" --out "$tmp/big.jpg" >/dev/null 2>&1; then
+    w=$(file -b "$tmp/big.jpg" | sed -n 's/.*[ ,]\([0-9][0-9]*\)x[0-9][0-9]*.*/\1/p')
+    if [ "${w:-0}" -ge 1600 ]; then scale=1/4; elif [ "${w:-0}" -ge 960 ]; then scale=1/2; else scale=""; fi
+    if [ -z "$scale" ]; then
+        jpg="$tmp/big.jpg"
+    elif djpeg -scale $scale "$tmp/big.jpg" | cjpeg -quality 80 > "$tmp/small.jpg" 2>/dev/null && [ -s "$tmp/small.jpg" ]; then
+        jpg="$tmp/small.jpg"
+    fi
+    [ -n "$jpg" ] && [ -n "$path" ] && cp "$jpg" "${path%.mp4}.jpg"     # next to the recording
 fi
 
 # the link: /player/<camera>#<camera>/<date>/<name> (the last three parts of the path, without .mp4)
