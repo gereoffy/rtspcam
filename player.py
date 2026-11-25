@@ -52,7 +52,7 @@ TUNE_KEYS = ("mv_min", "min_cluster", "global_limit", "window", "trigger_frames"
 # <name>_<HHMMSS>.mp4 (the recorder); any other *.mp4 is accepted too, its time of day then comes from the file time
 FNAME = re.compile(r"^(?P<stem>.+?)(?:_(?P<hms>\d{6}))?\.mp4$")
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-SIDECARS = (".mp4", ".mvmap", ".mvvec")          # one recording = these files (+ .keep when marked)
+SIDECARS = (".mp4", ".mvmap", ".mvvec", ".jpg")  # one recording = these files (+ .keep when marked; .jpg: the --on-alarm picture)
 TRASH = ".deleted"                                # deleted recordings wait here (<root>/.deleted/<camera>/<date>/) until rotate.py empties it
 
 

@@ -1,13 +1,17 @@
 /* Recording state machine, a port of run_session() / Segment in rtspcam.py. */
 #include <errno.h>
+#include <fcntl.h>
 #include <math.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "live.h"
 #include "log.h"
@@ -677,6 +681,51 @@ static void start(rc_session *s, double ts)
     free(path);
 }
 
+/* --on-alarm: the command in the background (sh -c "exec CMD \"$@\"" with the camera name and the recording's path as $1,
+ * $2; exec: the shell is replaced by the command, also dash, which forks for a single -c command, leaves no sh behind;
+ * the path is written as <path>.part until the recording ends, empty in view-only mode). Detached with a double fork: the
+ * recorder neither waits for it nor leaves a zombie, a slow script or mail server cannot hold the recording up. */
+static void run_on_alarm(rc_session *s, const char *path)
+{
+    const char *cmd = s->a->on_alarm;
+    char *sh;
+    pid_t pid;
+    if (!cmd || !*cmd || s->a->always || s->map_path)
+        return;
+    sh = malloc(strlen(cmd) + 16);
+    if (!sh)
+        return;
+    sprintf(sh, "exec %s \"$@\"", cmd);
+    if (s->viewonly)
+        path = "";
+    pid = fork();
+    if (pid < 0) {
+        log_warn("--on-alarm: cannot start %s: %s", cmd, strerror(errno));
+        free(sh);
+        return;
+    }
+    if (pid == 0) {
+        int fd;
+        setsid();
+        pid = fork();
+        if (pid != 0)
+            _exit(pid < 0 ? 1 : 0);
+        for (fd = 3; fd < 1024; fd++)       /* (not the camera's socket, the files and the viewers' sockets) */
+            close(fd);
+        fd = open("/dev/null", O_RDONLY);
+        if (fd > 0) {
+            dup2(fd, 0);
+            close(fd);
+        }
+        signal(SIGPIPE, SIG_DFL);           /* (ignored in the recorder, an ignored signal would stay so after exec) */
+        execl("/bin/sh", "sh", "-c", sh, "on-alarm", s->a->name ? s->a->name : "", path, (char *)NULL);
+        _exit(127);
+    }
+    waitpid(pid, NULL, 0);                  /* (the first child exits at once) */
+    free(sh);
+    log_info("on-alarm: %s %s %s", cmd, s->a->name ? s->a->name : "", path);
+}
+
 static void finish(rc_session *s)
 {
     segment *g = s->writer;
@@ -900,8 +949,11 @@ int rcs_packet(rc_session *s, const uint8_t *data, int size, int64_t dts, int64_
     if (!s->writer) {
         if (buf_append(s, &p, recp, vec, vec_n, fr.vcl_bytes) < 0)
             return -1;
-        if (want)
+        if (want) {
             start(s, ts);
+            if (s->writer)
+                run_on_alarm(s, s->writer->path);
+        }
         if (!s->writer && key)      /* not recording (or the start failed): bounded buffer */
             trim_buffer(s, ts);
     } else {

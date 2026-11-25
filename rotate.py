@@ -14,7 +14,7 @@ Every run, in this order:
      the camera (no per-run limit here).
 Never deleted: a marked recording (a <name>.keep next to it: the player's star), and per camera the newest
 "min_days" (3) day folders that exist (not calendar days: after a stop the last 3 days with recordings stay).
-Empty day folders are removed. A recording = its .mp4, .mvmap, .mvvec (and a crashed .part).
+Empty day folders are removed. A recording = its .mp4, .mvmap, .mvvec, .jpg (an --on-alarm picture) and a crashed .part.
 
 Settings: configs/rotate.conf next to this script (--config), read on every run (JSON; not .json: the cameras'
 configs are configs/<camera>.json, a camera called "rotate" would share it), e.g.:
@@ -39,7 +39,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TRASH = ".deleted"
 # the files of one recording, by suffix (the recorder writes <name>.mp4 + .mvmap + .mvvec; .part while it writes)
-SUFFIXES = (".mp4", ".mvmap", ".mvvec", ".mp4.part", ".mvmap.part", ".mvvec.part")
+SUFFIXES = (".mp4", ".mvmap", ".mvvec", ".jpg", ".mp4.part", ".mvmap.part", ".mvvec.part")   # (.jpg: the --on-alarm picture)
 # without a config (or for a key it leaves out): lenient, 30 days and 1 GB
 DEFAULTS = {"keep_days": 30, "keep_days_camera": {}, "min_free_gb": 1, "max_days_per_run": 2, "min_days": 3}
 

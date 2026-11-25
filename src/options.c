@@ -49,6 +49,7 @@ static const opt_def opts[] = {
     { "--fix", NULL, "fix", T_TRUE, OFF(fix), "rewrite max_num_ref_frames in the SPS for the browsers' decoders (needed by the Intellio cameras only)" },
     { "--no-map", NULL, "map", T_FALSE, OFF(map), "do not write the .mvmap sidecar" },
     { "--live", NULL, "live", T_STR, OFF(live), "DIR: live stream for viewers on the socket DIR/<name>.sock" },
+    { "--on-alarm", NULL, "on_alarm", T_STR, OFF(on_alarm), "CMD: run in the background (sh -c) when an alarm starts a recording; $1 = the camera name, $2 = the recording's path (written as <path>.part until it ends)" },
     { "--vectors", NULL, "vectors", T_TRUE, OFF(vectors), "also write <file>.mvvec: longest motion vector per 16x16 cell" },
     { "--audio", NULL, "audio", T_TRUE, OFF(audio), "also record the camera's audio into the MP4 (AAC only; never in the live view)" },
     { "--cheap", NULL, "cheap", T_TRUE, OFF(cheap), "accepted for compatibility (no effect)" },
@@ -103,6 +104,7 @@ void rc_opts_free(rc_opts *o)
     free(o->config);
     free(o->out);
     free(o->live);
+    free(o->on_alarm);
     for (i = 0; i < o->n_ignore; i++)
         free(o->ignore[i]);
     free(o->ignore);

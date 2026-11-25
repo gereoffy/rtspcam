@@ -83,6 +83,11 @@ A kapcsolók ugyanazok, mint az `rtspcam.py`-nál (`--config` JSON is megy), kiv
   hardveres dekódere e nélkül szellemképesen játssza le (lejátszó és élőkép is); a többi kameránál (Dahua, Hikvision,
   kínai) nem kell. Kameránként a configban is megadható: `"fix": true` (ez csak induláskor számít, az újraolvasás nem
   változtat rajta);
+- új: `--on-alarm PARANCS` (konfigban `"on_alarm"`, újraolvasáskor is átveszi): amikor egy riasztás új felvételt indít,
+  a parancs a háttérben lefut (`sh -c`, dupla fork: a felvevő nem vár rá, zombi sem marad, a nyitott fájlleírókat nem
+  örökli); `$1` = a kamera neve, `$2` = a felvétel útvonala (amíg tart, `<útvonal>.part`-ként íródik; `--viewonly`-ban
+  üres). A parancsba írt saját argumentumok ezek elé kerülnek. `--always` módban és fájlmódban nem fut. A ritkítás (pl. levél legfeljebb 10 percenként) a szkript dolga, így minden felvétel megkapja a képét. Minta:
+  `alarm-example.sh` (állókép a kamerától, kicsinyítve a felvétel mellé, e-mail linkkel).
 - új: `--viewonly`: nem ír fájlt (se `.mp4`, se `.mvmap`/`.mvvec`, könyvtárat sem hoz létre), minden más ugyanúgy megy:
   elemzés, riasztás, a felvétel indítása/leállítása „elvben” (a naplóban `EVENT start/stop`), és a `--live` élőkép a
   piros/narancs kerettel. Olyan kamerákhoz, amelyeknek csak az élőképe kell (pl. forgalmas utca).

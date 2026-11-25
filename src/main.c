@@ -350,6 +350,12 @@ static void check_config(rc_session *s)
 #define CHG_I(f) if (n.f != opts->f) { addf(msg, sizeof(msg), "%s" #f " %d -> %d", *msg ? ", " : "", opts->f, n.f); opts->f = n.f; }
     CHG_D(mv_min) CHG_D(min_blocks) CHG_I(min_cluster) CHG_D(global_limit) CHG_I(window) CHG_I(trigger_frames)
     CHG_I(max_ref_dist) CHG_I(skip_after_key) CHG_D(pre_roll) CHG_D(post_roll) CHG_D(max_segment) CHG_D(max_tail)
+    if (strcmp(n.on_alarm ? n.on_alarm : "", opts->on_alarm ? opts->on_alarm : "")) {
+        char *t = opts->on_alarm;
+        addf(msg, sizeof(msg), "%son_alarm '%s' -> '%s'", *msg ? ", " : "", t ? t : "", n.on_alarm ? n.on_alarm : "");
+        opts->on_alarm = n.on_alarm;
+        n.on_alarm = t;                 /* (the old one is freed with n) */
+    }
     same_zones = n.n_ignore == opts->n_ignore;
     for (i = 0; same_zones && i < n.n_ignore; i++)
         same_zones = !strcmp(n.ignore[i], opts->ignore[i]);

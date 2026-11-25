@@ -70,7 +70,7 @@ memóriában marad). A fájlok nem változnak; a letöltött fájl is hagyomány
 LinkPresentation (iMessage, Mac) egy `bytes=0-1` próbakérés után **a teljes fájlt letölti**, és csak utána mutat képet
 (Macen mérve, a fájl formátumától – töredékes vagy hagyományos MP4 – és a hangsávtól függetlenül). A telephely ~10 Mbit-es
 feltöltésén (~1 MB/s) egy 40 s-os, 8,4 MB-os felvétel ~8–10 s, egy 2,5 MB-os ~5 s; a régi ZoneMinder-linkek azért voltak
-gyorsak (~1 s), mert a Xeonról (193.224.177.9, ~30 Mbit) jöttek, és fele akkora bitrátával. Gyorsítani csak egy előnézeti
+gyorsak (~1 s), mert egy másik, gyors kapcsolatú gépről (~30 Mbit) jöttek, és fele akkora bitrátával. Gyorsítani csak egy előnézeti
 képes HTML oldallal lehetne (`og:image`), amit a lejátszó most nem készít. A szerver a `HEAD` kérésre is válaszol (a
 linkelőnézetek és letöltők gyakran ezzel kezdenek).
 
@@ -78,6 +78,15 @@ linkelőnézetek és letöltők gyakran ezzel kezdenek).
 
 **Függőségek:** csak a Python standard könyvtára (a lejátszó és az élőkép is). Az `av` (PyAV) opcionális: csak akkor kell, ha egy felvételhez nincs `.mvmap`
 (a hosszát ilyenkor a konténerből olvassa). A `numpy` a lejátszóhoz nem kell.
+
+## Riasztás (`--on-alarm`)
+A rögzítő `--on-alarm PARANCS` kapcsolóval (vagy a kamera konfigjában `"on_alarm": "..."`) a riasztással induló felvétel
+elején a háttérben lefuttat egy parancsot, nem vár rá: `$1` = a kamera neve, `$2` = a felvétel útvonala (`.mp4`; amíg tart,
+`.part`-ként íródik). A minta, `alarm-example.sh`: állóképet kér a kamerától (`onvif_encoder.py <kamera> snapshot`: ONVIF,
+vagy a Hikvision/Dahua saját címe), negyedére kicsinyíti (`djpeg -scale 1/4 | cjpeg`: a JPEG DCT-jéből, olcsó; 1920×1080 →
+480×270, ~40 KB; csomag: `libjpeg-turbo-progs`), a felvétel mellé menti `<név>.jpg`-ként (a lejátszó törlése és a
+`rotate.py` a felvétellel együtt kezeli), és `mailx`-szel elküldi a lejátszó linkjével (`/player/<kamera>#<id>`);
+minden riasztásnál lefut (minden felvétel kap képet), de levelet kameránként legfeljebb 10 percenként küld (`COOLDOWN` a szkriptben). Állókép nélküli kameráról (kínai HS-Camera) kép nélküli levél megy.
 
 ## Régi felvételek törlése (`rotate.py`)
 Cronból naponta futtatandó (pl. `15 3 * * * cd /home/rtspcam && python3 rotate.py rec >> log/rotate.log 2>&1`); a
