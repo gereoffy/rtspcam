@@ -29,8 +29,10 @@ A `snapshot` parancs fájlba menti (alapból `<kamera>.jpg`, vagy `--out FILE`):
 
     python3 onvif_encoder.py Utca snapshot --out utca.jpg
 
-Ha a kamera nem ad snapshot-URL-t (olcsó firmware-eknél előfordul), a `url` ezt írja ki („no snapshot URL” vagy a
-`GetSnapshotUri` hibája).
+Ha az ONVIF nem ad képet (nincs snapshot-URL, vagy az ONVIF ki van kapcsolva, mint a Hikvisionökön), a gyártók saját címeit
+próbálja sorban: Hikvision `/ISAPI/Streaming/channels/101/picture`, Dahua/Imou
+`/cgi-bin/snapshot.cgi?channel=1` (ezek a `snapshot (maker's address)` sorok). Az olcsó kínai HS-Camera firmware
+(`GetSnapshotUri` hiba, nincs HTTP-szerver) semmilyen állóképet nem ad.
 
 ## Kódoló
 

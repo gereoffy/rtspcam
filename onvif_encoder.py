@@ -331,6 +331,11 @@ def camera_from(arg, cameras_file, user=None, password=None):
     return cam
 
 
+# still picture addresses of the makers, tried when ONVIF gives none
+VENDOR_SNAPSHOTS = ("/ISAPI/Streaming/channels/101/picture",     # Hikvision (ONVIF off is fine)
+                    "/cgi-bin/snapshot.cgi?channel=1")          # Dahua / Imou
+
+
 def snapshot_url(cam, token):
     """the still picture URL of a profile (GetSnapshotUri), the host replaced by the one we reached; None if not offered"""
     r = cam.call(cam.media, "<trt:GetSnapshotUri><trt:ProfileToken>%s</trt:ProfileToken></trt:GetSnapshotUri>" % token)
@@ -465,16 +470,19 @@ def main():
     else:
         if not cam.user and any(" 401 " in e or "uthoriz" in e for e in errors):
             sys.exit("the camera needs a user name and password: give user:password@%s or --user/--password" % a.camera)
-        sys.exit("ONVIF error: %s" % "; ".join(errors))
-    if not a.port and cam.port != PORTS[0]:
+        if a.action not in ("url", "snapshot"):
+            sys.exit("ONVIF error: %s" % "; ".join(errors))
+        print("ONVIF error: %s" % "; ".join(errors), file=sys.stderr)       # (a still picture may still come: below)
+        cam.port = None
+    if cam.port and not a.port and cam.port != PORTS[0]:
         print("note: ONVIF on port %d" % cam.port, file=sys.stderr)
     if a.action in ("url", "snapshot"):
-        try:
-            urls = stream_urls(cam)
-        except (OSError, RuntimeError) as e:
-            sys.exit("ONVIF error: %s" % e)
-        if not urls:
-            sys.exit("the camera reported no media profile")
+        urls = []
+        if cam.port:
+            try:
+                urls = stream_urls(cam)
+            except (OSError, RuntimeError) as e:
+                print("ONVIF error: %s" % e, file=sys.stderr)
         seen = {}
         for tok, name, info, uri in urls:
             if a.action == "url":
@@ -490,6 +498,16 @@ def main():
             if a.action == "url":
                 print("    snapshot: %s" % ("%s  -> %s" % (snap, "OK, " + seen[snap][1] if seen[snap][0] else seen[snap][1])
                                             if snap else note))
+        # no picture over ONVIF (not offered, or ONVIF is off, as on the Hikvisions here): the makers' own addresses
+        if not any(d and d[:2] == b"\xff\xd8" for d, _ in seen.values()):
+            host = "[%s]" % cam.host if ":" in cam.host else cam.host
+            for path in VENDOR_SNAPSHOTS:
+                u = "http://%s%s" % (host, path)
+                seen[u] = fetch_snapshot(cam, u, timeout=5)
+                if a.action == "url":
+                    print("    snapshot (maker's address): %s  -> %s" % (u, "OK, " + seen[u][1] if seen[u][0] else seen[u][1]))
+                if seen[u][0] and seen[u][0][:2] == b"\xff\xd8":
+                    break
         if a.action == "snapshot":
             good = [(u, d) for u, (d, _) in seen.items() if d and d[:2] == b"\xff\xd8"]
             if not good:
