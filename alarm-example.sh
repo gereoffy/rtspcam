@@ -13,6 +13,10 @@
 # the recording in the player. It runs at every alarm (every recording gets its picture); the mail goes at most once per
 # camera per COOLDOWN minutes. POSIX sh (dash on Ubuntu), no bash needed.
 
+# the recorder's environment has no locale, and mailx refuses non-ASCII text then ("Invalid or incomplete multibyte or
+# wide character", the mail goes to dead.letter): the texts below are without accents, and UTF-8 in case one is added
+export LC_ALL=C.UTF-8
+
 MAILTO="you@example.com"                     # who gets the mail
 PLAYER="http://player.example.com:8888"      # the player as the recipients reach it
 COOLDOWN=10                                  # minutes between two mails of the same camera
@@ -53,13 +57,13 @@ fi
 touch "$stamp"
 
 {
-    echo "Riasztás: $cam"
+    echo "Riasztas: $cam"
     date '+%Y-%m-%d %H:%M:%S'
-    [ -n "$link" ] && echo "A felvétel: $link"
-    [ -z "$jpg" ] && echo "(a kamera nem ad állóképet)"
+    [ -n "$link" ] && echo "A felvetel: $link"
+    [ -z "$jpg" ] && echo "(a kamera nem ad allokepet)"
 } > "$tmp/body.txt"
 if [ -n "$jpg" ]; then
-    mailx -a "$jpg" -s "Riasztás: $cam" "$MAILTO" < "$tmp/body.txt"
+    mailx -a "$jpg" -s "Riasztas: $cam" "$MAILTO" < "$tmp/body.txt"
 else
-    mailx -s "Riasztás: $cam" "$MAILTO" < "$tmp/body.txt"
+    mailx -s "Riasztas: $cam" "$MAILTO" < "$tmp/body.txt"
 fi
